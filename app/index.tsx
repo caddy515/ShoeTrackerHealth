@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Animated } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput } from 'react-native';
 import { initializeApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import AppleHealthKit from 'rn-apple-healthkit';
 
 const firebaseConfig = {
@@ -27,6 +27,13 @@ const ACHIEVEMENTS = {
   linked: { id: 'linked', name: 'LINKED', icon: '🔗', description: 'Connected Apple Health', coins: 150 },
 };
 
+const getShoeLevel = (mileage) => {
+  if (mileage >= 300) return { level: 4, name: 'LEGEND', color: '#ff00ff', emoji: '👑' };
+  if (mileage >= 200) return { level: 3, name: 'VETERAN', color: '#0ff', emoji: '⚔️' };
+  if (mileage >= 100) return { level: 2, name: 'BROKEN IN', color: '#00ff00', emoji: '🔥' };
+  return { level: 1, name: 'NEW', color: '#ffff00', emoji: '✨' };
+};
+
 const AnimatedRunner = () => {
   const [frame, setFrame] = useState(0);
   
@@ -46,17 +53,11 @@ const AnimatedRunner = () => {
   );
 };
 
-const getShoeLevel = (mileage) => {
-  if (mileage >= 300) return { level: 4, name: 'LEGEND', color: '#ff00ff', emoji: '👑' };
-  if (mileage >= 200) return { level: 3, name: 'VETERAN', color: '#0ff', emoji: '⚔️' };
-  if (mileage >= 100) return { level: 2, name: 'BROKEN IN', color: '#00ff00', emoji: '🔥' };
-  return { level: 1, name: 'NEW', color: '#ffff00', emoji: '✨' };
-};
-
 export default function App() {
   const [user, setUser] = useState(null);
   const [shoes, setShoes] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [healthWorkouts, setHealthWorkouts] = useState([]);
   const [gameStats, setGameStats] = useState({ coins: 0, achievements: [] });
   const [currentPage, setCurrentPage] = useState('login');
   const [selectedShoe, setSelectedShoe] = useState(null);
@@ -67,6 +68,8 @@ export default function App() {
   const [showAddShoe, setShowAddShoe] = useState(false);
   const [showAddLog, setShowAddLog] = useState(false);
   const [showStats, setShowStats] = useState(false);
+  const [showAssignWorkout, setShowAssignWorkout] = useState(false);
+  const [selectedWorkout, setSelectedWorkout] = useState(null);
   const [healthAuthorized, setHealthAuthorized] = useState(false);
   const [unlockedAchievement, setUnlockedAchievement] = useState(null);
   const [newShoe, setNewShoe] = useState({ name: '', brand: '', purchaseDate: '', targetMileage: '300' });
@@ -79,6 +82,7 @@ export default function App() {
         loadShoes(currentUser.uid);
         loadLogs(currentUser.uid);
         loadGameStats(currentUser.uid);
+        loadHealthWorkouts(currentUser.uid);
         setCurrentPage('dashboard');
       }
       setLoading(false);
@@ -101,6 +105,16 @@ export default function App() {
       setLogs(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, mileage: parseFloat(doc.data().mileage) })));
     } catch (error) {
       console.error('Load logs error:', error);
+    }
+  };
+
+  const loadHealthWorkouts = async (userId) => {
+    try {
+      const snapshot = await getDocs(query(collection(db, 'users', userId, 'health-workouts')));
+      const workouts = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, distance: parseFloat(doc.data().distance) }));
+      setHealthWorkouts(workouts);
+    } catch (error) {
+      console.error('Load health workouts error:', error);
     }
   };
 
@@ -139,6 +153,7 @@ export default function App() {
       await signOut(auth);
       setShoes([]);
       setLogs([]);
+      setHealthWorkouts([]);
       setGameStats({ coins: 0, achievements: [] });
     } catch (error) {
       Alert.alert('Error', error.message);
@@ -217,6 +232,7 @@ export default function App() {
                 duration: workout.duration,
                 source: 'Apple Health',
                 importedAt: new Date().toISOString(),
+                assigned: false,
               });
               synced++;
             }
@@ -225,6 +241,7 @@ export default function App() {
           }
         }
 
+        await loadHealthWorkouts(user.uid);
         Alert.alert('Success', `Synced ${synced} workouts from Apple Health!`);
         setLoading(false);
       });
@@ -232,6 +249,44 @@ export default function App() {
       console.error('Sync error:', error);
       Alert.alert('Error', error.message);
       setLoading(false);
+    }
+  };
+
+  const handleAssignWorkout = async (shoeId) => {
+    if (!selectedWorkout) return;
+
+    try {
+      const mileageValue = selectedWorkout.distance;
+      
+      // Add to logs
+      const docRef = await addDoc(collection(db, 'users', user.uid, 'logs'), {
+        shoeId: shoeId,
+        mileage: mileageValue,
+        date: selectedWorkout.date,
+        notes: `From Apple Health - ${selectedWorkout.type}`,
+        createdAt: new Date().toISOString(),
+      });
+
+      // Update game stats
+      const baseCoins = 10 + Math.floor(mileageValue);
+      const newCoins = (gameStats.coins || 0) + baseCoins;
+      const newStats = { ...gameStats, coins: newCoins };
+      setGameStats(newStats);
+      await setDoc(doc(db, 'users', user.uid, 'gameStats', 'data'), newStats, { merge: true });
+
+      // Delete from health-workouts
+      await deleteDoc(doc(db, 'users', user.uid, 'health-workouts', selectedWorkout.id));
+
+      // Reload
+      await loadLogs(user.uid);
+      await loadHealthWorkouts(user.uid);
+      await loadGameStats(user.uid);
+
+      setShowAssignWorkout(false);
+      setSelectedWorkout(null);
+      Alert.alert('Success', `${mileageValue} miles assigned to ${shoes.find(s => s.id === shoeId)?.name}!`);
+    } catch (error) {
+      Alert.alert('Error', error.message);
     }
   };
 
@@ -485,6 +540,28 @@ export default function App() {
                 })}
               </View>
 
+              {healthWorkouts.length > 0 && (
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>SYNCED FROM APPLE HEALTH</Text>
+                  {healthWorkouts.map((workout, index) => (
+                    <TouchableOpacity 
+                      key={index} 
+                      style={styles.workoutCard}
+                      onPress={() => {
+                        setSelectedWorkout(workout);
+                        setShowAssignWorkout(true);
+                      }}
+                    >
+                      <View>
+                        <Text style={styles.workoutMileage}>{workout.distance} MI</Text>
+                        <Text style={styles.workoutDate}>{workout.date} • {workout.type}</Text>
+                      </View>
+                      <Text style={styles.workoutTap}>TAP TO ASSIGN</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>HEALTH SYNC</Text>
                 <TouchableOpacity
@@ -555,6 +632,37 @@ export default function App() {
               <TouchableOpacity style={styles.submitBtn} onPress={handleAddLog}>
                 <Text style={styles.submitBtnText}>LOG IT</Text>
               </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={showAssignWorkout} transparent animationType="slide">
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>ASSIGN WORKOUT</Text>
+                <TouchableOpacity onPress={() => { setShowAssignWorkout(false); setSelectedWorkout(null); }}>
+                  <Text style={styles.closeBtn}>X</Text>
+                </TouchableOpacity>
+              </View>
+              {selectedWorkout && (
+                <>
+                  <Text style={styles.workoutDetail}>{selectedWorkout.distance} MI • {selectedWorkout.date}</Text>
+                  <Text style={styles.workoutDetail}>{selectedWorkout.type}</Text>
+                  <Text style={styles.pickShoeText}>SELECT A SHOE</Text>
+                  <ScrollView style={{ maxHeight: 200 }}>
+                    {shoes.map(shoe => (
+                      <TouchableOpacity
+                        key={shoe.id}
+                        style={styles.shoeOption}
+                        onPress={() => handleAssignWorkout(shoe.id)}
+                      >
+                        <Text style={styles.shoeOptionText}>{shoe.name} • {shoe.brand}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </>
+              )}
             </View>
           </View>
         </Modal>
@@ -701,6 +809,14 @@ const styles = StyleSheet.create({
   progressText: { fontSize: 9, color: '#ffff00' },
   logBtn: { backgroundColor: '#00ff00', padding: 8, alignItems: 'center' },
   logBtnText: { color: '#000', fontWeight: 'bold', fontSize: 10 },
+  workoutCard: { backgroundColor: '#1a1a2e', borderWidth: 2, borderColor: '#ff00ff', padding: 12, marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  workoutMileage: { fontSize: 14, fontWeight: 'bold', color: '#0ff' },
+  workoutDate: { fontSize: 10, color: '#ffff00', marginTop: 3 },
+  workoutTap: { fontSize: 9, color: '#ff00ff', fontWeight: 'bold' },
+  workoutDetail: { fontSize: 12, color: '#0ff', marginBottom: 8, textAlign: 'center' },
+  pickShoeText: { fontSize: 11, fontWeight: 'bold', color: '#ffff00', marginBottom: 10, textAlign: 'center' },
+  shoeOption: { backgroundColor: '#000', borderWidth: 2, borderColor: '#00ff00', padding: 12, marginBottom: 8 },
+  shoeOptionText: { fontSize: 12, color: '#00ff00', fontWeight: 'bold' },
   achievementPopup: { position: 'absolute', top: 100, left: 20, right: 20, backgroundColor: '#ff00ff', borderWidth: 3, borderColor: '#ffff00', padding: 20, alignItems: 'center', zIndex: 999 },
   achievementIcon: { fontSize: 40, marginBottom: 10 },
   achievementTitle: { fontSize: 12, fontWeight: 'bold', color: '#000', marginBottom: 5 },
@@ -719,4 +835,5 @@ const styles = StyleSheet.create({
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, borderBottomWidth: 2, borderBottomColor: '#ff00ff', paddingBottom: 10 },
   modalTitle: { fontSize: 14, fontWeight: 'bold', color: '#0ff' },
   closeBtn: { fontSize: 18, color: '#ff0000', fontWeight: 'bold' },
+  title: { fontSize: 20, color: '#0ff', textAlign: 'center', marginTop: 20 },
 });
