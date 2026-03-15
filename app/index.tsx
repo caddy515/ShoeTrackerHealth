@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Animated } from 'react-native';
 import { initializeApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc } from 'firebase/firestore';
@@ -25,6 +25,25 @@ const ACHIEVEMENTS = {
   collector: { id: 'collector', name: 'COLLECTOR', icon: '👟👟👟', description: '3+ shoes', coins: 60 },
   consistentFire: { id: 'consistentFire', name: 'CONSISTENT FIRE', icon: '🔥', description: '4 weeks logging', coins: 200 },
   linked: { id: 'linked', name: 'LINKED', icon: '🔗', description: 'Connected Apple Health', coins: 150 },
+};
+
+const AnimatedRunner = () => {
+  const [frame, setFrame] = useState(0);
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setFrame(f => (f + 1) % 4);
+    }, 300);
+    return () => clearInterval(interval);
+  }, []);
+
+  const runners = ['🏃', '🏃‍♂️', '🏃', '🏃‍♂️'];
+  
+  return (
+    <Text style={{ fontSize: 80, textAlign: 'center', marginBottom: 20 }}>
+      {runners[frame]}
+    </Text>
+  );
 };
 
 const getShoeLevel = (mileage) => {
@@ -90,9 +109,12 @@ export default function App() {
       const docRef = await getDoc(doc(db, 'users', userId, 'gameStats', 'data'));
       if (docRef.exists()) {
         setGameStats(docRef.data());
+      } else {
+        setGameStats({ coins: 0, achievements: [] });
       }
     } catch (error) {
       console.error('Load stats error:', error);
+      setGameStats({ coins: 0, achievements: [] });
     }
   };
 
@@ -125,7 +147,7 @@ export default function App() {
 
   const requestHealthKitPermission = async () => {
     try {
-      const options = {
+      const permissions = {
         permissions: {
           read: [
             AppleHealthKit.Constants.Permissions.HKQuantityTypeIdentifierDistanceWalkingRunning,
@@ -134,9 +156,10 @@ export default function App() {
         },
       };
 
-      AppleHealthKit.initHealthKit(options, (err, results) => {
+      AppleHealthKit.initHealthKit(permissions, (err) => {
         if (err) {
-          Alert.alert('Error', 'Failed to authorize Health');
+          console.error('HealthKit init error:', err);
+          Alert.alert('Error', 'Could not access Apple Health. Please enable in Settings.');
           return;
         }
         setHealthAuthorized(true);
@@ -144,13 +167,14 @@ export default function App() {
         Alert.alert('Success', 'Apple Health authorized!');
       });
     } catch (error) {
-      Alert.alert('Error', 'Authorization failed: ' + error.message);
+      console.error('Health permission error:', error);
+      Alert.alert('Error', error.message);
     }
   };
 
   const syncWorkouts = async () => {
     if (!healthAuthorized) {
-      Alert.alert('Error', 'Authorize Health first');
+      Alert.alert('Error', 'Please authorize Apple Health first');
       return;
     }
 
@@ -168,29 +192,36 @@ export default function App() {
 
       AppleHealthKit.getWorkouts(options, async (err, results) => {
         if (err) {
-          Alert.alert('Error', 'Failed to fetch workouts');
+          console.error('Get workouts error:', err);
+          Alert.alert('Error', 'Could not fetch workouts from Apple Health');
+          setLoading(false);
+          return;
+        }
+
+        if (!results || results.length === 0) {
+          Alert.alert('No workouts found', 'No workouts found in Apple Health');
           setLoading(false);
           return;
         }
 
         let synced = 0;
-        if (results && results.length > 0) {
-          for (const workout of results) {
-            if (workout.distance) {
+        for (const workout of results) {
+          try {
+            if (workout.distance && workout.distance > 0) {
               const miles = (workout.distance * 0.000621371).toFixed(2);
-              try {
-                await addDoc(collection(db, 'users', user.uid, 'health-workouts'), {
-                  type: 'Run',
-                  distance: parseFloat(miles),
-                  date: new Date(workout.startDate).toISOString().split('T')[0],
-                  source: 'Apple Health',
-                  importedAt: new Date().toISOString(),
-                });
-                synced++;
-              } catch (error) {
-                console.error('Firebase error:', error);
-              }
+              
+              await addDoc(collection(db, 'users', user.uid, 'health-workouts'), {
+                type: workout.activityName || 'Run',
+                distance: parseFloat(miles),
+                date: new Date(workout.startDate).toISOString().split('T')[0],
+                duration: workout.duration,
+                source: 'Apple Health',
+                importedAt: new Date().toISOString(),
+              });
+              synced++;
             }
+          } catch (fbError) {
+            console.error('Firebase error:', fbError);
           }
         }
 
@@ -198,7 +229,8 @@ export default function App() {
         setLoading(false);
       });
     } catch (error) {
-      Alert.alert('Error', 'Sync failed: ' + error.message);
+      console.error('Sync error:', error);
+      Alert.alert('Error', error.message);
       setLoading(false);
     }
   };
@@ -250,7 +282,7 @@ export default function App() {
       setLogs(updatedLogs);
 
       const baseCoins = 10 + Math.floor(mileageValue);
-      const newCoins = gameStats.coins + baseCoins;
+      const newCoins = (gameStats.coins || 0) + baseCoins;
       const newStats = { ...gameStats, coins: newCoins };
       setGameStats(newStats);
       await setDoc(doc(db, 'users', user.uid, 'gameStats', 'data'), newStats, { merge: true });
@@ -268,11 +300,11 @@ export default function App() {
   };
 
   const awardAchievement = async (achievementId) => {
-    if (!gameStats.achievements.includes(achievementId)) {
+    if (!gameStats.achievements || !gameStats.achievements.includes(achievementId)) {
       const achievement = ACHIEVEMENTS[achievementId];
       setUnlockedAchievement(achievement);
-      const newCoins = gameStats.coins + achievement.coins;
-      const newAchievements = [...gameStats.achievements, achievementId];
+      const newCoins = (gameStats.coins || 0) + achievement.coins;
+      const newAchievements = [...(gameStats.achievements || []), achievementId];
       const newStats = { coins: newCoins, achievements: newAchievements };
       setGameStats(newStats);
       await setDoc(doc(db, 'users', user.uid, 'gameStats', 'data'), newStats, { merge: true });
@@ -284,7 +316,7 @@ export default function App() {
     return logs.filter(log => log.shoeId === shoeId).reduce((total, log) => total + log.mileage, 0).toFixed(1);
   };
 
-  const calculateUserLevel = (coins) => Math.floor(coins / 100) + 1;
+  const calculateUserLevel = (coins) => Math.floor((coins || 0) / 100) + 1;
 
   if (loading) {
     return <View style={styles.container}><Text style={styles.title}>LOADING...</Text></View>;
@@ -294,7 +326,7 @@ export default function App() {
     return (
       <View style={styles.container}>
         <View style={styles.loginHeader}>
-          <Text style={styles.runnerEmoji}>🏃</Text>
+          <AnimatedRunner />
           <Text style={styles.loginTitle}>SHOE TRACKER 10000</Text>
           <Text style={styles.loginSubtitle}>Record your shoe mileage, and play to win!</Text>
         </View>
@@ -345,7 +377,7 @@ export default function App() {
           </View>
           <View style={styles.headerStats}>
             <Text style={styles.headerStat}>⭐ LV {calculateUserLevel(gameStats.coins)}</Text>
-            <Text style={styles.headerStat}>🪙 {gameStats.coins}</Text>
+            <Text style={styles.headerStat}>🪙 {gameStats.coins || 0}</Text>
           </View>
         </View>
 
@@ -363,7 +395,7 @@ export default function App() {
             <View style={styles.statsCard}>
               <Text style={styles.statsTitle}>YOUR SCORECARD</Text>
               <Text style={styles.statLine}>PLAYER LEVEL: {calculateUserLevel(gameStats.coins)}</Text>
-              <Text style={styles.statLine}>TOTAL COINS: {gameStats.coins}</Text>
+              <Text style={styles.statLine}>TOTAL COINS: {gameStats.coins || 0}</Text>
               
               <View style={styles.coinLegend}>
                 <Text style={styles.legendTitle}>HOW TO EARN COINS</Text>
@@ -372,10 +404,10 @@ export default function App() {
                 <Text style={styles.legendText}>🪙 +bonus coins for achievements</Text>
               </View>
 
-              <Text style={styles.achievementCount}>ACHIEVEMENTS: {gameStats.achievements.length} / {Object.keys(ACHIEVEMENTS).length}</Text>
+              <Text style={styles.achievementCount}>ACHIEVEMENTS: {(gameStats.achievements || []).length} / {Object.keys(ACHIEVEMENTS).length}</Text>
               <View style={styles.achievementGrid}>
                 {Object.values(ACHIEVEMENTS).map(achievement => (
-                  <View key={achievement.id} style={[styles.achievementCard, !gameStats.achievements.includes(achievement.id) && styles.achievementCardLocked]}>
+                  <View key={achievement.id} style={[styles.achievementCard, !(gameStats.achievements || []).includes(achievement.id) && styles.achievementCardLocked]}>
                     <Text style={styles.achievementCardIcon}>{achievement.icon}</Text>
                     <Text style={styles.achievementCardName}>{achievement.name}</Text>
                     <Text style={styles.achievementCardDesc}>{achievement.description}</Text>
@@ -611,8 +643,7 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  loginHeader: { alignItems: 'center', marginTop: 60, marginBottom: 40 },
-  runnerEmoji: { fontSize: 80, marginBottom: 20 },
+  loginHeader: { alignItems: 'center', marginTop: 20, marginBottom: 30 },
   loginTitle: { fontSize: 28, fontWeight: 'bold', color: '#0ff', marginBottom: 10, textAlign: 'center' },
   loginSubtitle: { fontSize: 12, color: '#ffff00', textAlign: 'center', paddingHorizontal: 20 },
   loginForm: { paddingHorizontal: 20, paddingVertical: 30 },
@@ -620,7 +651,7 @@ const styles = StyleSheet.create({
   submitBtn: { backgroundColor: '#ff00ff', borderWidth: 3, borderColor: '#ffff00', padding: 15, marginTop: 20, marginBottom: 15 },
   submitBtnText: { color: '#000', fontWeight: 'bold', textAlign: 'center', fontSize: 14 },
   toggleAuth: { textAlign: 'center', color: '#00ff00', fontSize: 11, marginTop: 10 },
-  header: { backgroundColor: '#1a1a2e', borderBottomWidth: 3, borderBottomColor: '#ff00ff', borderTopWidth: 3, borderTopColor: '#0ff', padding: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 40 },
+  header: { backgroundColor: '#1a1a2e', borderBottomWidth: 3, borderBottomColor: '#ff00ff', borderTopWidth: 3, borderTopColor: '#0ff', padding: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 },
   headerTitle: { fontSize: 14, fontWeight: 'bold', color: '#0ff', flex: 1 },
   headerEmail: { fontSize: 10, color: '#ffff00', marginTop: 5 },
   headerStats: { alignItems: 'flex-end' },
