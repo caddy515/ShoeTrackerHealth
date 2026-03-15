@@ -11,8 +11,13 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.caddy515.ShoeTrackerHealth",
+      "entitlements": {
+        "com.apple.healthkit": true
+      },
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSHealthShareUsageDescription": "We need access to your health data to track running workouts",
+        "NSHealthUpdateUsageDescription": "We need permission to read your running workouts from Apple Health"
       }
     },
     "android": {
@@ -23,7 +28,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.caddy515.ShoeTrackerHealth"
     },
     "web": {
       "output": "static",
