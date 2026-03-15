@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Image, Animated } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput } from 'react-native';
 import { initializeApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
-import RNHealthkit from 'react-native-health';
+import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc } from 'firebase/firestore';
+import AppleHealthKit from 'rn-apple-healthkit';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCS9OcckFBy2UbUGEn-Knp_TARNy8EBf5w",
@@ -33,12 +33,6 @@ const getShoeLevel = (mileage) => {
   if (mileage >= 100) return { level: 2, name: 'BROKEN IN', color: '#00ff00', emoji: '🔥' };
   return { level: 1, name: 'NEW', color: '#ffff00', emoji: '✨' };
 };
-
-const AnimatedRunner = () => (
-  <View style={styles.runner}>
-    <Text style={styles.runnerEmoji}>🏃</Text>
-  </View>
-);
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -129,6 +123,86 @@ export default function App() {
     }
   };
 
+  const requestHealthKitPermission = async () => {
+    try {
+      const options = {
+        permissions: {
+          read: [
+            AppleHealthKit.Constants.Permissions.HKQuantityTypeIdentifierDistanceWalkingRunning,
+            AppleHealthKit.Constants.Permissions.HKWorkoutTypeIdentifier,
+          ],
+        },
+      };
+
+      AppleHealthKit.initHealthKit(options, (err, results) => {
+        if (err) {
+          Alert.alert('Error', 'Failed to authorize Health');
+          return;
+        }
+        setHealthAuthorized(true);
+        awardAchievement('linked');
+        Alert.alert('Success', 'Apple Health authorized!');
+      });
+    } catch (error) {
+      Alert.alert('Error', 'Authorization failed: ' + error.message);
+    }
+  };
+
+  const syncWorkouts = async () => {
+    if (!healthAuthorized) {
+      Alert.alert('Error', 'Authorize Health first');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+      const options = {
+        startDate: thirtyDaysAgo,
+        endDate: now,
+        ascending: false,
+        limit: 100,
+      };
+
+      AppleHealthKit.getWorkouts(options, async (err, results) => {
+        if (err) {
+          Alert.alert('Error', 'Failed to fetch workouts');
+          setLoading(false);
+          return;
+        }
+
+        let synced = 0;
+        if (results && results.length > 0) {
+          for (const workout of results) {
+            if (workout.distance) {
+              const miles = (workout.distance * 0.000621371).toFixed(2);
+              try {
+                await addDoc(collection(db, 'users', user.uid, 'health-workouts'), {
+                  type: 'Run',
+                  distance: parseFloat(miles),
+                  date: new Date(workout.startDate).toISOString().split('T')[0],
+                  source: 'Apple Health',
+                  importedAt: new Date().toISOString(),
+                });
+                synced++;
+              } catch (error) {
+                console.error('Firebase error:', error);
+              }
+            }
+          }
+        }
+
+        Alert.alert('Success', `Synced ${synced} workouts from Apple Health!`);
+        setLoading(false);
+      });
+    } catch (error) {
+      Alert.alert('Error', 'Sync failed: ' + error.message);
+      setLoading(false);
+    }
+  };
+
   const handleAddShoe = async () => {
     if (!newShoe.name || !newShoe.brand) {
       Alert.alert('Error', 'Fill all fields');
@@ -206,67 +280,6 @@ export default function App() {
     }
   };
 
-  const requestHealthKitPermission = async () => {
-    try {
-      RNHealthkit.initHealthKit({}, (error) => {
-        if (error) {
-          Alert.alert('Error', 'Failed to authorize Health');
-        } else {
-          setHealthAuthorized(true);
-          awardAchievement('linked');
-          Alert.alert('Success', 'Apple Health authorized!');
-        }
-      });
-    } catch (error) {
-      Alert.alert('Error', error.message);
-    }
-  };
-
-  const syncWorkouts = async () => {
-    if (!healthAuthorized) {
-      Alert.alert('Error', 'Authorize Health first');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const now = new Date();
-      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-      RNHealthkit.getWorkouts({
-        startDate: thirtyDaysAgo.getTime(),
-        endDate: now.getTime(),
-      }, async (error, results) => {
-        if (error) {
-          Alert.alert('Error', 'Failed to sync');
-          setLoading(false);
-          return;
-        }
-
-        let synced = 0;
-        for (const workout of results) {
-          if (workout.distance) {
-            const miles = (workout.distance / 1609.34).toFixed(2);
-            await addDoc(collection(db, 'users', user.uid, 'health-workouts'), {
-              type: 'Run',
-              distance: parseFloat(miles),
-              date: new Date(workout.startDate).toISOString().split('T')[0],
-              source: 'Apple Health',
-              importedAt: new Date().toISOString(),
-            });
-            synced++;
-          }
-        }
-
-        Alert.alert('Success', `Synced ${synced} workouts!`);
-        setLoading(false);
-      });
-    } catch (error) {
-      Alert.alert('Error', 'Sync failed');
-      setLoading(false);
-    }
-  };
-
   const getTotalMileage = (shoeId) => {
     return logs.filter(log => log.shoeId === shoeId).reduce((total, log) => total + log.mileage, 0).toFixed(1);
   };
@@ -281,7 +294,7 @@ export default function App() {
     return (
       <View style={styles.container}>
         <View style={styles.loginHeader}>
-          <AnimatedRunner />
+          <Text style={styles.runnerEmoji}>🏃</Text>
           <Text style={styles.loginTitle}>SHOE TRACKER 10000</Text>
           <Text style={styles.loginSubtitle}>Record your shoe mileage, and play to win!</Text>
         </View>
@@ -599,81 +612,80 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   loginHeader: { alignItems: 'center', marginTop: 60, marginBottom: 40 },
-  runner: { marginBottom: 20 },
-  runnerEmoji: { fontSize: 80, textAlign: 'center' },
+  runnerEmoji: { fontSize: 80, marginBottom: 20 },
   loginTitle: { fontSize: 28, fontWeight: 'bold', color: '#0ff', marginBottom: 10, textAlign: 'center' },
   loginSubtitle: { fontSize: 12, color: '#ffff00', textAlign: 'center', paddingHorizontal: 20 },
   loginForm: { paddingHorizontal: 20, paddingVertical: 30 },
-  input: { backgroundColor: '#000', borderWidth: 2, borderColor: '#0ff', color: '#0ff', padding: 12, marginBottom: 15, borderRadius: 0, fontSize: 12, fontFamily: 'Courier New' },
+  input: { backgroundColor: '#000', borderWidth: 2, borderColor: '#0ff', color: '#0ff', padding: 12, marginBottom: 15, borderRadius: 0, fontSize: 12 },
   submitBtn: { backgroundColor: '#ff00ff', borderWidth: 3, borderColor: '#ffff00', padding: 15, marginTop: 20, marginBottom: 15 },
-  submitBtnText: { color: '#000', fontWeight: 'bold', textAlign: 'center', fontSize: 14, fontFamily: 'Courier New' },
-  toggleAuth: { textAlign: 'center', color: '#00ff00', fontSize: 11, marginTop: 10, fontFamily: 'Courier New' },
+  submitBtnText: { color: '#000', fontWeight: 'bold', textAlign: 'center', fontSize: 14 },
+  toggleAuth: { textAlign: 'center', color: '#00ff00', fontSize: 11, marginTop: 10 },
   header: { backgroundColor: '#1a1a2e', borderBottomWidth: 3, borderBottomColor: '#ff00ff', borderTopWidth: 3, borderTopColor: '#0ff', padding: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 40 },
-  headerTitle: { fontSize: 14, fontWeight: 'bold', color: '#0ff', flex: 1, fontFamily: 'Courier New' },
-  headerEmail: { fontSize: 10, color: '#ffff00', marginTop: 5, fontFamily: 'Courier New' },
+  headerTitle: { fontSize: 14, fontWeight: 'bold', color: '#0ff', flex: 1 },
+  headerEmail: { fontSize: 10, color: '#ffff00', marginTop: 5 },
   headerStats: { alignItems: 'flex-end' },
-  headerStat: { fontSize: 10, color: '#ffff00', fontFamily: 'Courier New' },
+  headerStat: { fontSize: 10, color: '#ffff00' },
   headerButtons: { flexDirection: 'row', paddingHorizontal: 15, paddingVertical: 10, gap: 10 },
   btn: { flex: 1, backgroundColor: '#1a1a2e', borderWidth: 2, borderColor: '#0ff', padding: 10, alignItems: 'center', borderRadius: 0 },
-  btnText: { color: '#0ff', fontWeight: 'bold', fontSize: 11, fontFamily: 'Courier New' },
+  btnText: { color: '#0ff', fontWeight: 'bold', fontSize: 11 },
   btnAdd: { backgroundColor: '#ff00ff', borderColor: '#ffff00', borderWidth: 2, paddingHorizontal: 15, paddingVertical: 8 },
-  btnAddText: { color: '#000', fontWeight: 'bold', fontSize: 12, fontFamily: 'Courier New' },
+  btnAddText: { color: '#000', fontWeight: 'bold', fontSize: 12 },
   btnPrimary: { backgroundColor: '#ff00ff', borderWidth: 2, borderColor: '#ffff00', padding: 15, marginBottom: 12, alignItems: 'center' },
-  btnPrimaryText: { color: '#000', fontWeight: 'bold', fontSize: 12, fontFamily: 'Courier New' },
+  btnPrimaryText: { color: '#000', fontWeight: 'bold', fontSize: 12 },
   btnDisabled: { backgroundColor: '#666', padding: 15, marginBottom: 12, alignItems: 'center' },
   content: { flex: 1, paddingHorizontal: 15, paddingTop: 15 },
   statsCard: { backgroundColor: '#1a1a2e', borderWidth: 3, borderColor: '#0ff', padding: 15, marginBottom: 20 },
-  statsTitle: { fontSize: 14, fontWeight: 'bold', color: '#ffff00', marginBottom: 10, fontFamily: 'Courier New' },
-  statLine: { fontSize: 11, color: '#0ff', marginBottom: 8, fontFamily: 'Courier New' },
+  statsTitle: { fontSize: 14, fontWeight: 'bold', color: '#ffff00', marginBottom: 10 },
+  statLine: { fontSize: 11, color: '#0ff', marginBottom: 8 },
   coinLegend: { backgroundColor: '#000', borderWidth: 2, borderColor: '#ffff00', padding: 12, marginVertical: 15 },
-  legendTitle: { fontSize: 12, fontWeight: 'bold', color: '#ffff00', marginBottom: 8, fontFamily: 'Courier New' },
-  legendText: { fontSize: 10, color: '#0ff', marginBottom: 5, fontFamily: 'Courier New' },
-  achievementCount: { fontSize: 11, color: '#ffff00', marginBottom: 12, fontFamily: 'Courier New' },
+  legendTitle: { fontSize: 12, fontWeight: 'bold', color: '#ffff00', marginBottom: 8 },
+  legendText: { fontSize: 10, color: '#0ff', marginBottom: 5 },
+  achievementCount: { fontSize: 11, color: '#ffff00', marginBottom: 12 },
   achievementGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   achievementCard: { width: '48%', backgroundColor: '#000', borderWidth: 2, borderColor: '#00ff00', padding: 10, alignItems: 'center' },
   achievementCardLocked: { opacity: 0.4, borderColor: '#666' },
   achievementCardIcon: { fontSize: 28, marginBottom: 5 },
-  achievementCardName: { fontSize: 9, fontWeight: 'bold', color: '#0ff', textAlign: 'center', fontFamily: 'Courier New' },
-  achievementCardDesc: { fontSize: 8, color: '#ffff00', textAlign: 'center', marginTop: 3, fontFamily: 'Courier New' },
+  achievementCardName: { fontSize: 9, fontWeight: 'bold', color: '#0ff', textAlign: 'center' },
+  achievementCardDesc: { fontSize: 8, color: '#ffff00', textAlign: 'center', marginTop: 3 },
   emptyState: { alignItems: 'center', paddingVertical: 60 },
   emptyIcon: { fontSize: 80, marginBottom: 20 },
-  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#0ff', marginBottom: 10, fontFamily: 'Courier New' },
-  emptyText: { fontSize: 11, color: '#ffff00', marginBottom: 20, fontFamily: 'Courier New' },
+  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#0ff', marginBottom: 10 },
+  emptyText: { fontSize: 11, color: '#ffff00', marginBottom: 20 },
   statsGrid: { flexDirection: 'row', gap: 10, marginBottom: 20 },
   statCard2: { flex: 1, backgroundColor: '#1a1a2e', borderWidth: 2, borderColor: '#0ff', padding: 12, alignItems: 'center' },
-  statLabel: { fontSize: 9, color: '#ffff00', marginBottom: 5, fontFamily: 'Courier New' },
-  statValue: { fontSize: 24, fontWeight: 'bold', color: '#00ff00', fontFamily: 'Courier New' },
+  statLabel: { fontSize: 9, color: '#ffff00', marginBottom: 5 },
+  statValue: { fontSize: 24, fontWeight: 'bold', color: '#00ff00' },
   section: { marginBottom: 25 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  sectionTitle: { fontSize: 12, fontWeight: 'bold', color: '#ffff00', fontFamily: 'Courier New' },
+  sectionTitle: { fontSize: 12, fontWeight: 'bold', color: '#ffff00' },
   shoeCard: { backgroundColor: '#1a1a2e', borderWidth: 2, borderColor: '#00ff00', padding: 12, marginBottom: 12 },
   shoeCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  shoeName: { fontSize: 12, fontWeight: 'bold', color: '#0ff', fontFamily: 'Courier New' },
-  shoeBrand: { fontSize: 10, color: '#ffff00', marginTop: 2, fontFamily: 'Courier New' },
+  shoeName: { fontSize: 12, fontWeight: 'bold', color: '#0ff' },
+  shoeBrand: { fontSize: 10, color: '#ffff00', marginTop: 2 },
   shoeLevelBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 3 },
-  shoeLevelText: { fontSize: 10, fontWeight: 'bold', color: '#000', fontFamily: 'Courier New' },
+  shoeLevelText: { fontSize: 10, fontWeight: 'bold', color: '#000' },
   progressBar: { height: 10, backgroundColor: '#000', borderWidth: 1, borderColor: '#0ff', marginBottom: 8, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: '#00ff00' },
-  progressLabel: { flexDirection: 'row', justifyContent: 'space-between', fontSize: 9, color: '#ffff00', marginBottom: 10, fontFamily: 'Courier New' },
-  progressText: { fontSize: 9, color: '#ffff00', fontFamily: 'Courier New' },
+  progressLabel: { flexDirection: 'row', justifyContent: 'space-between', fontSize: 9, color: '#ffff00', marginBottom: 10 },
+  progressText: { fontSize: 9, color: '#ffff00' },
   logBtn: { backgroundColor: '#00ff00', padding: 8, alignItems: 'center' },
-  logBtnText: { color: '#000', fontWeight: 'bold', fontSize: 10, fontFamily: 'Courier New' },
+  logBtnText: { color: '#000', fontWeight: 'bold', fontSize: 10 },
   achievementPopup: { position: 'absolute', top: 100, left: 20, right: 20, backgroundColor: '#ff00ff', borderWidth: 3, borderColor: '#ffff00', padding: 20, alignItems: 'center', zIndex: 999 },
   achievementIcon: { fontSize: 40, marginBottom: 10 },
-  achievementTitle: { fontSize: 12, fontWeight: 'bold', color: '#000', marginBottom: 5, fontFamily: 'Courier New' },
-  achievementName: { fontSize: 13, fontWeight: 'bold', color: '#000', marginBottom: 8, fontFamily: 'Courier New' },
-  achievementCoins: { fontSize: 11, fontWeight: 'bold', color: '#000', fontFamily: 'Courier New' },
-  detailTitle: { fontSize: 20, fontWeight: 'bold', color: '#0ff', textAlign: 'center', marginVertical: 15, fontFamily: 'Courier New' },
-  detailBrand: { fontSize: 14, color: '#ffff00', textAlign: 'center', marginBottom: 20, fontFamily: 'Courier New' },
-  levelText: { fontSize: 11, fontWeight: 'bold', fontFamily: 'Courier New' },
-  backBtn: { fontSize: 12, color: '#0ff', fontWeight: 'bold', fontFamily: 'Courier New' },
+  achievementTitle: { fontSize: 12, fontWeight: 'bold', color: '#000', marginBottom: 5 },
+  achievementName: { fontSize: 13, fontWeight: 'bold', color: '#000', marginBottom: 8 },
+  achievementCoins: { fontSize: 11, fontWeight: 'bold', color: '#000' },
+  detailTitle: { fontSize: 20, fontWeight: 'bold', color: '#0ff', textAlign: 'center', marginVertical: 15 },
+  detailBrand: { fontSize: 14, color: '#ffff00', textAlign: 'center', marginBottom: 20 },
+  levelText: { fontSize: 11, fontWeight: 'bold' },
+  backBtn: { fontSize: 12, color: '#0ff', fontWeight: 'bold' },
   logItem: { backgroundColor: '#1a1a2e', borderLeftWidth: 3, borderLeftColor: '#00ff00', padding: 12, marginBottom: 8, flexDirection: 'row', justifyContent: 'space-between' },
-  logTitle: { fontSize: 11, fontWeight: 'bold', color: '#0ff', fontFamily: 'Courier New' },
-  logDate: { fontSize: 9, color: '#ffff00', marginTop: 3, fontFamily: 'Courier New' },
-  logMileage: { fontSize: 16, fontWeight: 'bold', color: '#00ff00', fontFamily: 'Courier New' },
+  logTitle: { fontSize: 11, fontWeight: 'bold', color: '#0ff' },
+  logDate: { fontSize: 9, color: '#ffff00', marginTop: 3 },
+  logMileage: { fontSize: 16, fontWeight: 'bold', color: '#00ff00' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: '#000', borderTopWidth: 3, borderTopColor: '#0ff', padding: 20 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, borderBottomWidth: 2, borderBottomColor: '#ff00ff', paddingBottom: 10 },
-  modalTitle: { fontSize: 14, fontWeight: 'bold', color: '#0ff', fontFamily: 'Courier New' },
-  closeBtn: { fontSize: 18, color: '#ff0000', fontWeight: 'bold', fontFamily: 'Courier New' },
+  modalTitle: { fontSize: 14, fontWeight: 'bold', color: '#0ff' },
+  closeBtn: { fontSize: 18, color: '#ff0000', fontWeight: 'bold' },
 });
