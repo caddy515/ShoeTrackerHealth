@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Keyboard } from 'react-native';
 import { initializeApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
@@ -312,6 +312,7 @@ export default function App() {
       }
       setNewShoe({ name: '', brand: '', purchaseDate: '', targetMileage: '300' });
       setShowAddShoe(false);
+      Keyboard.dismiss();
     } catch (error) {
       Alert.alert('Error', error.message);
     }
@@ -349,6 +350,7 @@ export default function App() {
 
       setNewLog({ shoeId: '', mileage: '', date: new Date().toISOString().split('T')[0], notes: '' });
       setShowAddLog(false);
+      Keyboard.dismiss();
     } catch (error) {
       Alert.alert('Error', error.message);
     }
@@ -611,6 +613,9 @@ export default function App() {
               </View>
               <TextInput style={styles.input} placeholder="SHOE NAME" placeholderTextColor="#666" value={newShoe.name} onChangeText={(text) => setNewShoe({ ...newShoe, name: text })} />
               <TextInput style={styles.input} placeholder="BRAND" placeholderTextColor="#666" value={newShoe.brand} onChangeText={(text) => setNewShoe({ ...newShoe, brand: text })} />
+              <TouchableOpacity style={styles.doneBtn} onPress={() => Keyboard.dismiss()}>
+                <Text style={styles.doneBtnText}>DONE</Text>
+              </TouchableOpacity>
               <TouchableOpacity style={styles.submitBtn} onPress={handleAddShoe}>
                 <Text style={styles.submitBtnText}>ADD SHOE</Text>
               </TouchableOpacity>
@@ -629,6 +634,9 @@ export default function App() {
               </View>
               <TextInput style={styles.input} placeholder="MILEAGE" placeholderTextColor="#666" keyboardType="decimal-pad" value={newLog.mileage} onChangeText={(text) => setNewLog({ ...newLog, mileage: text })} />
               <TextInput style={styles.input} placeholder="DATE" placeholderTextColor="#666" value={newLog.date} onChangeText={(text) => setNewLog({ ...newLog, date: text })} />
+              <TouchableOpacity style={styles.doneBtn} onPress={() => Keyboard.dismiss()}>
+                <Text style={styles.doneBtnText}>DONE</Text>
+              </TouchableOpacity>
               <TouchableOpacity style={styles.submitBtn} onPress={handleAddLog}>
                 <Text style={styles.submitBtnText}>LOG IT</Text>
               </TouchableOpacity>
@@ -738,6 +746,9 @@ export default function App() {
                 </TouchableOpacity>
               </View>
               <TextInput style={styles.input} placeholder="MILEAGE" placeholderTextColor="#666" keyboardType="decimal-pad" value={newLog.mileage} onChangeText={(text) => setNewLog({ ...newLog, mileage: text })} />
+              <TouchableOpacity style={styles.doneBtn} onPress={() => Keyboard.dismiss()}>
+                <Text style={styles.doneBtnText}>DONE</Text>
+              </TouchableOpacity>
               <TouchableOpacity style={styles.submitBtn} onPress={handleAddLog}>
                 <Text style={styles.submitBtnText}>LOG IT</Text>
               </TouchableOpacity>
@@ -758,6 +769,8 @@ const styles = StyleSheet.create({
   input: { backgroundColor: '#000', borderWidth: 2, borderColor: '#0ff', color: '#0ff', padding: 12, marginBottom: 15, borderRadius: 0, fontSize: 12 },
   submitBtn: { backgroundColor: '#ff00ff', borderWidth: 3, borderColor: '#ffff00', padding: 15, marginTop: 20, marginBottom: 15 },
   submitBtnText: { color: '#000', fontWeight: 'bold', textAlign: 'center', fontSize: 14 },
+  doneBtn: { backgroundColor: '#00ff00', padding: 12, marginBottom: 10, alignItems: 'center' },
+  doneBtnText: { color: '#000', fontWeight: 'bold', fontSize: 12 },
   toggleAuth: { textAlign: 'center', color: '#00ff00', fontSize: 11, marginTop: 10 },
   header: { backgroundColor: '#1a1a2e', borderBottomWidth: 3, borderBottomColor: '#ff00ff', borderTopWidth: 3, borderTopColor: '#0ff', padding: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 },
   headerTitle: { fontSize: 14, fontWeight: 'bold', color: '#0ff', flex: 1 },
