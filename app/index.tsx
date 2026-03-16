@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, Tex
 import { initializeApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
-import AppleHealthKit from 'rn-apple-healthkit';
+import * as Health from 'expo-health';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCS9OcckFBy2UbUGEn-Knp_TARNy8EBf5w",
@@ -162,28 +162,19 @@ export default function App() {
 
   const requestHealthKitPermission = async () => {
     try {
-      const permissions = {
-        permissions: {
-          read: [
-            AppleHealthKit.Constants.Permissions.HKQuantityTypeIdentifierDistanceWalkingRunning,
-            AppleHealthKit.Constants.Permissions.HKWorkoutTypeIdentifier,
-          ],
-        },
-      };
-
-      AppleHealthKit.initHealthKit(permissions, (err) => {
-        if (err) {
-          console.error('HealthKit init error:', err);
-          Alert.alert('Error', 'Could not access Apple Health. Please enable in Settings.');
-          return;
-        }
+      const permissions = [Health.HealthPermissions.DISTANCE_WALKING_RUNNING];
+      const authorized = await Health.requestHealthkitPermissionsAsync(permissions);
+      
+      if (authorized) {
         setHealthAuthorized(true);
         awardAchievement('linked');
         Alert.alert('Success', 'Apple Health authorized!');
-      });
+      } else {
+        Alert.alert('Error', 'Health permissions not granted');
+      }
     } catch (error) {
       console.error('Health permission error:', error);
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', 'Could not authorize Apple Health');
     }
   };
 
@@ -198,56 +189,37 @@ export default function App() {
       const now = new Date();
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-      const options = {
-        startDate: thirtyDaysAgo,
-        endDate: now,
-        ascending: false,
-        limit: 100,
-      };
+      const samples = await Health.getHealthRecordsAsync(
+        Health.HealthMetrics.DISTANCE_WALKING_RUNNING,
+        thirtyDaysAgo,
+        now
+      );
 
-      AppleHealthKit.getWorkouts(options, async (err, results) => {
-        if (err) {
-          console.error('Get workouts error:', err);
-          Alert.alert('Error', 'Could not fetch workouts from Apple Health');
-          setLoading(false);
-          return;
+      let synced = 0;
+      for (const sample of samples) {
+        try {
+          const miles = (sample.value / 1609.34).toFixed(2);
+          
+          await addDoc(collection(db, 'users', user.uid, 'health-workouts'), {
+            type: 'Running/Walking',
+            distance: parseFloat(miles),
+            date: new Date(sample.startDate).toISOString().split('T')[0],
+            source: 'Apple Health',
+            importedAt: new Date().toISOString(),
+            assigned: false,
+          });
+          synced++;
+        } catch (fbError) {
+          console.error('Firebase error:', fbError);
         }
+      }
 
-        if (!results || results.length === 0) {
-          Alert.alert('No workouts found', 'No workouts found in Apple Health');
-          setLoading(false);
-          return;
-        }
-
-        let synced = 0;
-        for (const workout of results) {
-          try {
-            if (workout.distance && workout.distance > 0) {
-              const miles = (workout.distance * 0.000621371).toFixed(2);
-              
-              await addDoc(collection(db, 'users', user.uid, 'health-workouts'), {
-                type: workout.activityName || 'Run',
-                distance: parseFloat(miles),
-                date: new Date(workout.startDate).toISOString().split('T')[0],
-                duration: workout.duration,
-                source: 'Apple Health',
-                importedAt: new Date().toISOString(),
-                assigned: false,
-              });
-              synced++;
-            }
-          } catch (fbError) {
-            console.error('Firebase error:', fbError);
-          }
-        }
-
-        await loadHealthWorkouts(user.uid);
-        Alert.alert('Success', `Synced ${synced} workouts from Apple Health!`);
-        setLoading(false);
-      });
+      await loadHealthWorkouts(user.uid);
+      Alert.alert('Success', `Synced ${synced} workouts from Apple Health!`);
+      setLoading(false);
     } catch (error) {
       console.error('Sync error:', error);
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', 'Could not sync workouts: ' + error.message);
       setLoading(false);
     }
   };
@@ -258,8 +230,7 @@ export default function App() {
     try {
       const mileageValue = selectedWorkout.distance;
       
-      // Add to logs
-      const docRef = await addDoc(collection(db, 'users', user.uid, 'logs'), {
+      await addDoc(collection(db, 'users', user.uid, 'logs'), {
         shoeId: shoeId,
         mileage: mileageValue,
         date: selectedWorkout.date,
@@ -267,17 +238,14 @@ export default function App() {
         createdAt: new Date().toISOString(),
       });
 
-      // Update game stats
       const baseCoins = 10 + Math.floor(mileageValue);
       const newCoins = (gameStats.coins || 0) + baseCoins;
       const newStats = { ...gameStats, coins: newCoins };
       setGameStats(newStats);
       await setDoc(doc(db, 'users', user.uid, 'gameStats', 'data'), newStats, { merge: true });
 
-      // Delete from health-workouts
       await deleteDoc(doc(db, 'users', user.uid, 'health-workouts', selectedWorkout.id));
 
-      // Reload
       await loadLogs(user.uid);
       await loadHealthWorkouts(user.uid);
       await loadGameStats(user.uid);
