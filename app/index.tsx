@@ -17,6 +17,8 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const resolveAppleHealthKit = () => (AppleHealthKit?.default ? AppleHealthKit.default : AppleHealthKit);
+
 
 const ACHIEVEMENTS = {
   firstStep: { id: 'firstStep', name: 'FIRST STEP', icon: '👟', description: 'Log your first run', coins: 10 },
@@ -171,7 +173,7 @@ export default function App() {
         },
       };
 
-      AppleHealthKit.initHealthKit(permissions, (err) => {
+      healthKit.initHealthKit(permissions, (err) => {
         if (err) {
           console.error('HealthKit init error:', err);
           Alert.alert('Error', 'Could not access Apple Health. Please enable in Settings.');
@@ -205,7 +207,15 @@ export default function App() {
         limit: 100,
       };
 
-      AppleHealthKit.getWorkouts(options, async (err, results) => {
+      const healthKit = resolveAppleHealthKit();
+
+      if (!healthKit || typeof healthKit.getWorkouts !== 'function') {
+        Alert.alert('HealthKit unavailable', 'This build does not include Apple Health workout APIs.');
+        setLoading(false);
+        return;
+      }
+
+      healthKit.getWorkouts(options, async (err, results) => {
         if (err) {
           console.error('Get workouts error:', err);
           Alert.alert('Error', 'Could not fetch workouts from Apple Health');
