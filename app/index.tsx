@@ -17,7 +17,21 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const resolveAppleHealthKit = () => (AppleHealthKit?.default ? AppleHealthKit.default : AppleHealthKit);
+const resolveAppleHealthKit = () => {
+  const candidates = [
+    AppleHealthKitModule,
+    AppleHealthKitModule?.default,
+    AppleHealthKitModule?.default?.default,
+  ].filter(Boolean);
+
+  return (
+    candidates.find(
+      (candidate) =>
+        typeof candidate.initHealthKit === 'function' ||
+        typeof candidate.getWorkouts === 'function'
+    ) || candidates[0] || null
+  );
+};
 
 
 const ACHIEVEMENTS = {
