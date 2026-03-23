@@ -164,12 +164,35 @@ export default function App() {
 
   const requestHealthKitPermission = async () => {
     try {
+      if (Platform.OS !== 'ios') {
+        Alert.alert('Unsupported', 'Apple Health is available on iOS only.');
+        return;
+      }
+
+      const healthKit = resolveAppleHealthKit();
+      console.log('HealthKit module keys:', Object.keys(healthKit || {}));
+
+      if (!healthKit || typeof healthKit.initHealthKit !== 'function') {
+        Alert.alert(
+          'HealthKit unavailable',
+          'This build does not include the Apple Health native module. Install an EAS iOS build (not Expo Go) and try again.'
+        );
+        return;
+      }
+
+      const healthKitPermissions = healthKit?.Constants?.Permissions || {};
+      const distancePermission =
+        healthKitPermissions.HKQuantityTypeIdentifierDistanceWalkingRunning ||
+        healthKitPermissions.DistanceWalkingRunning ||
+        'DistanceWalkingRunning';
+      const workoutPermission =
+        healthKitPermissions.HKWorkoutTypeIdentifier ||
+        healthKitPermissions.Workout ||
+        'Workout';
+
       const permissions = {
         permissions: {
-          read: [
-            AppleHealthKit.Constants.Permissions.HKQuantityTypeIdentifierDistanceWalkingRunning,
-            AppleHealthKit.Constants.Permissions.HKWorkoutTypeIdentifier,
-          ],
+          read: [distancePermission, workoutPermission],
         },
       };
 
@@ -185,7 +208,7 @@ export default function App() {
       });
     } catch (error) {
       console.error('Health permission error:', error);
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', error?.message || String(error));
     }
   };
 
