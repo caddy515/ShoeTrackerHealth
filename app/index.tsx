@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Keyboard } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Keyboard, Platform, Image } from 'react-native';
 import { initializeApp } from 'firebase/app';
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, initializeAuth, getReactNativePersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
-import AppleHealthKit from 'rn-apple-healthkit';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
+const AppleHealthKitModule = require('rn-apple-healthkit');
+
 
 const firebaseConfig = {
   apiKey: "AIzaSyCS9OcckFBy2UbUGEn-Knp_TARNy8EBf5w",
@@ -15,8 +18,32 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+const auth = (() => {
+  try {
+    return initializeAuth(app, {
+      persistence: getReactNativePersistence(AsyncStorage),
+    });
+  } catch (error) {
+    return getAuth(app);
+  }
+})();
 const db = getFirestore(app);
+const resolveAppleHealthKit = () => {
+  const candidates = [
+    AppleHealthKitModule,
+    AppleHealthKitModule?.default,
+    AppleHealthKitModule?.default?.default,
+  ].filter(Boolean);
+
+  return (
+    candidates.find(
+      (candidate) =>
+        typeof candidate.initHealthKit === 'function' ||
+        typeof candidate.getWorkouts === 'function'
+    ) || candidates[0] || null
+  );
+};
+
 
 const ACHIEVEMENTS = {
   firstStep: { id: 'firstStep', name: 'FIRST STEP', icon: '👟', description: 'Log your first run', coins: 10 },
@@ -34,24 +61,15 @@ const getShoeLevel = (mileage) => {
   return { level: 1, name: 'NEW', color: '#ffff00', emoji: '✨' };
 };
 
-const AnimatedRunner = () => {
-  const [frame, setFrame] = useState(0);
-  
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setFrame(f => (f + 1) % 4);
-    }, 300);
-    return () => clearInterval(interval);
-  }, []);
+const RUNNER_GIF_URL = 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExZWF6djNnaWh0ZGg2d3Q0eTRiOG9xMmsxZWN1dTJjN3B3MXI2MnRpbiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/oQ5x7HfN6SpdK/giphy.gif';
 
-  const runners = ['🏃', '🏃‍♂️', '🏃', '🏃‍♂️'];
-  
-  return (
-    <Text style={{ fontSize: 80, textAlign: 'center', marginBottom: 20 }}>
-      {runners[frame]}
-    </Text>
-  );
-};
+const RunnerGif = () => (
+  <Image
+    source={{ uri: RUNNER_GIF_URL }}
+    style={{ width: 120, height: 80, alignSelf: 'center', marginBottom: 12 }}
+    resizeMode="contain"
+  />
+);
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -72,7 +90,7 @@ export default function App() {
   const [selectedWorkout, setSelectedWorkout] = useState(null);
   const [healthAuthorized, setHealthAuthorized] = useState(false);
   const [unlockedAchievement, setUnlockedAchievement] = useState(null);
-  const [newShoe, setNewShoe] = useState({ name: '', brand: '', purchaseDate: '', targetMileage: '300' });
+  const [newShoe, setNewShoe] = useState({ name: '', brand: '', purchaseDate: '', targetMileage: '300', photoUrl: '' });
   const [newLog, setNewLog] = useState({ shoeId: '', mileage: '', date: new Date().toISOString().split('T')[0], notes: '' });
 
   useEffect(() => {
@@ -143,7 +161,7 @@ export default function App() {
       setEmail('');
       setPassword('');
     } catch (error) {
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', error?.message || String(error));
     }
     setLoading(false);
   };
@@ -156,22 +174,39 @@ export default function App() {
       setHealthWorkouts([]);
       setGameStats({ coins: 0, achievements: [] });
     } catch (error) {
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', error?.message || String(error));
     }
   };
 
   const requestHealthKitPermission = async () => {
     try {
+      if (Platform.OS !== 'ios') {
+        Alert.alert('Unsupported', 'Apple Health is available on iOS only.');
+        return;
+      }
+
+      const healthKit = resolveAppleHealthKit();
+      console.log('HealthKit module keys:', Object.keys(healthKit || {}), 'init:', typeof healthKit?.initHealthKit, 'workouts:', typeof healthKit?.getWorkouts);
+
+      if (!healthKit || typeof healthKit.initHealthKit !== 'function') {
+        Alert.alert(
+          'HealthKit unavailable',
+          'This build does not include the Apple Health native module. Install an EAS iOS build (not Expo Go) and try again.'
+        );
+        return;
+      }
+
+      const healthKitPermissions = healthKit?.Constants?.Permissions || {};
+      const distancePermission = healthKitPermissions.HKQuantityTypeIdentifierDistanceWalkingRunning || healthKitPermissions.DistanceWalkingRunning || 'DistanceWalkingRunning';
+      const workoutPermission = healthKitPermissions.HKWorkoutTypeIdentifier || healthKitPermissions.Workout || 'Workout';
+
       const permissions = {
         permissions: {
-          read: [
-            AppleHealthKit.Constants.Permissions.HKQuantityTypeIdentifierDistanceWalkingRunning,
-            AppleHealthKit.Constants.Permissions.HKWorkoutTypeIdentifier,
-          ],
+          read: [distancePermission, workoutPermission],
         },
       };
 
-      AppleHealthKit.initHealthKit(permissions, (err) => {
+      healthKit.initHealthKit(permissions, (err) => {
         if (err) {
           console.error('HealthKit init error:', err);
           Alert.alert('Error', 'Could not access Apple Health. Please enable in Settings.');
@@ -183,13 +218,49 @@ export default function App() {
       });
     } catch (error) {
       console.error('Health permission error:', error);
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', error?.message || String(error));
     }
   };
 
+  const getWorkoutDistanceMeters = (workout) => {
+    const possibleDistance =
+      workout?.distance ??
+      workout?.totalDistance ??
+      workout?.distanceWalkingRunning ??
+      workout?.metadata?.distance;
+
+    const distance = Number(possibleDistance);
+    return Number.isFinite(distance) ? distance : 0;
+  };
+
+  const getWorkoutStartDate = (workout) => {
+    const rawDate = workout?.startDate ?? workout?.start ?? workout?.endDate;
+    const date = rawDate ? new Date(rawDate) : null;
+    return date && !Number.isNaN(date.getTime()) ? date : null;
+  };
+
+  const buildWorkoutFingerprint = (workout) => {
+    const startDate = getWorkoutStartDate(workout);
+    const start = startDate ? startDate.toISOString() : 'unknown-start';
+    const duration = workout?.duration || 0;
+    const activity = workout?.activityName || workout?.workoutActivityType || workout?.type || 'workout';
+    const distance = getWorkoutDistanceMeters(workout);
+    return `${start}|${duration}|${activity}|${distance}`;
+  };
+
   const syncWorkouts = async () => {
+    if (Platform.OS !== 'ios') {
+      Alert.alert('Unsupported', 'Apple Health sync is available on iOS only.');
+      return;
+    }
+
     if (!healthAuthorized) {
       Alert.alert('Error', 'Please authorize Apple Health first');
+      return;
+    }
+
+    if (!user?.uid) {
+      Alert.alert('Error', 'Please log in again and retry sync.');
       return;
     }
 
@@ -199,13 +270,21 @@ export default function App() {
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
       const options = {
-        startDate: thirtyDaysAgo,
-        endDate: now,
+        startDate: thirtyDaysAgo.toISOString(),
+        endDate: now.toISOString(),
         ascending: false,
         limit: 100,
       };
 
-      AppleHealthKit.getWorkouts(options, async (err, results) => {
+      const healthKit = resolveAppleHealthKit();
+
+      if (!healthKit || typeof healthKit.getWorkouts !== 'function') {
+        Alert.alert('HealthKit unavailable', 'This build does not include Apple Health workout APIs.');
+        setLoading(false);
+        return;
+      }
+
+      healthKit.getWorkouts(options, async (err, results) => {
         if (err) {
           console.error('Get workouts error:', err);
           Alert.alert('Error', 'Could not fetch workouts from Apple Health');
@@ -214,40 +293,65 @@ export default function App() {
         }
 
         if (!results || results.length === 0) {
-          Alert.alert('No workouts found', 'No workouts found in Apple Health');
+          Alert.alert('No workouts found', 'No workouts found in Apple Health for the last 30 days.');
           setLoading(false);
           return;
         }
 
-        let synced = 0;
-        for (const workout of results) {
-          try {
-            if (workout.distance && workout.distance > 0) {
-              const miles = (workout.distance * 0.000621371).toFixed(2);
-              
-              await addDoc(collection(db, 'users', user.uid, 'health-workouts'), {
-                type: workout.activityName || 'Run',
-                distance: parseFloat(miles),
-                date: new Date(workout.startDate).toISOString().split('T')[0],
-                duration: workout.duration,
-                source: 'Apple Health',
-                importedAt: new Date().toISOString(),
-                assigned: false,
-              });
-              synced++;
-            }
-          } catch (fbError) {
-            console.error('Firebase error:', fbError);
-          }
-        }
+        try {
+          const existingSnapshot = await getDocs(query(collection(db, 'users', user.uid, 'health-workouts')));
+          const existingFingerprints = new Set(existingSnapshot.docs.map((workoutDoc) => workoutDoc.data().sourceWorkoutId).filter(Boolean));
 
-        await loadHealthWorkouts(user.uid);
-        Alert.alert('Success', `Synced ${synced} workouts from Apple Health!`);
-        setLoading(false);
+          let synced = 0;
+          let skipped = 0;
+
+          for (const workout of results) {
+            const sourceWorkoutId = buildWorkoutFingerprint(workout);
+            if (existingFingerprints.has(sourceWorkoutId)) {
+              skipped++;
+              continue;
+            }
+
+            try {
+              const distanceMeters = getWorkoutDistanceMeters(workout);
+              const workoutStartDate = getWorkoutStartDate(workout);
+
+              if (distanceMeters > 0 && workoutStartDate) {
+                const miles = (distanceMeters * 0.000621371).toFixed(2);
+
+                await addDoc(collection(db, 'users', user.uid, 'health-workouts'), {
+                  type: workout?.activityName || workout?.workoutActivityType || 'Run',
+                  distance: parseFloat(miles),
+                  date: workoutStartDate.toISOString().split('T')[0],
+                  duration: workout?.duration || 0,
+                  source: 'Apple Health',
+                  sourceWorkoutId,
+                  importedAt: new Date().toISOString(),
+                  assigned: false,
+                });
+
+                existingFingerprints.add(sourceWorkoutId);
+                synced++;
+              } else {
+                skipped++;
+              }
+            } catch (fbError) {
+              console.error('Firebase save error:', fbError);
+            }
+          }
+
+          await loadHealthWorkouts(user.uid);
+          Alert.alert('Success', `Synced ${synced} workout(s). Skipped ${skipped} already imported/invalid workout(s).`);
+        } catch (innerError) {
+          console.error('Sync processing error:', innerError);
+          Alert.alert('Error', innerError.message || 'Failed while saving workouts.');
+        } finally {
+          setLoading(false);
+        }
       });
     } catch (error) {
       console.error('Sync error:', error);
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', error?.message || String(error));
       setLoading(false);
     }
   };
@@ -282,7 +386,28 @@ export default function App() {
       setSelectedWorkout(null);
       Alert.alert('Success', `${mileageValue} miles assigned to ${shoes.find(s => s.id === shoeId)?.name}!`);
     } catch (error) {
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', error?.message || String(error));
+    }
+  };
+
+  const handlePickShoePhoto = async () => {
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission needed', 'Please allow camera access to take a shoe photo.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+      });
+
+      if (!result.canceled && result.assets?.length) {
+        setNewShoe((current) => ({ ...current, photoUrl: result.assets[0].uri }));
+      }
+    } catch (error) {
+      Alert.alert('Error', error?.message || String(error));
     }
   };
 
@@ -298,6 +423,7 @@ export default function App() {
         brand: newShoe.brand,
         purchaseDate: newShoe.purchaseDate,
         targetMileage: parseFloat(newShoe.targetMileage),
+        photoUrl: newShoe.photoUrl || '',
         createdAt: new Date().toISOString(),
       });
 
@@ -306,11 +432,11 @@ export default function App() {
       if (updatedShoes.length === 3) {
         awardAchievement('collector');
       }
-      setNewShoe({ name: '', brand: '', purchaseDate: '', targetMileage: '300' });
+      setNewShoe({ name: '', brand: '', purchaseDate: '', targetMileage: '300', photoUrl: '' });
       setShowAddShoe(false);
       Keyboard.dismiss();
     } catch (error) {
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', error?.message || String(error));
     }
   };
 
@@ -348,7 +474,7 @@ export default function App() {
       setShowAddLog(false);
       Keyboard.dismiss();
     } catch (error) {
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', error?.message || String(error));
     }
   };
 
@@ -379,7 +505,7 @@ export default function App() {
     return (
       <View style={styles.container}>
         <View style={styles.loginHeader}>
-          <AnimatedRunner />
+          <RunnerGif />
           <Text style={styles.loginTitle}>SHOE TRACKER 10000</Text>
           <Text style={styles.loginSubtitle}>Record your shoe mileage, and play to win!</Text>
         </View>
@@ -512,9 +638,12 @@ export default function App() {
                   return (
                     <TouchableOpacity key={shoe.id} style={styles.shoeCard} onPress={() => { setSelectedShoe(shoe.id); setCurrentPage('detail'); }}>
                       <View style={styles.shoeCardHeader}>
-                        <View>
-                          <Text style={styles.shoeName}>{shoe.name}</Text>
-                          <Text style={styles.shoeBrand}>{shoe.brand}</Text>
+                        <View style={styles.shoeInfoRow}>
+                          {shoe.photoUrl ? <Image source={{ uri: shoe.photoUrl }} style={styles.shoeThumb} /> : null}
+                          <View>
+                            <Text style={styles.shoeName}>{shoe.name}</Text>
+                            <Text style={styles.shoeBrand}>{shoe.brand}</Text>
+                          </View>
                         </View>
                         <View style={[styles.shoeLevelBadge, { backgroundColor: level.color }]}>
                           <Text style={styles.shoeLevelText}>{level.emoji} LV {level.level}</Text>
@@ -604,11 +733,16 @@ export default function App() {
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>ADD SHOE</Text>
                 <TouchableOpacity onPress={() => setShowAddShoe(false)}>
-                  <Text style={styles.closeBtn}>X</Text>
+                  <Text style={styles.closeBtn}>✕</Text>
                 </TouchableOpacity>
               </View>
               <TextInput style={styles.input} placeholder="SHOE NAME" placeholderTextColor="#666" value={newShoe.name} onChangeText={(text) => setNewShoe({ ...newShoe, name: text })} />
               <TextInput style={styles.input} placeholder="BRAND" placeholderTextColor="#666" value={newShoe.brand} onChangeText={(text) => setNewShoe({ ...newShoe, brand: text })} />
+              <TouchableOpacity style={styles.photoBtn} onPress={handlePickShoePhoto}>
+                <Text style={styles.photoBtnText}>📸 TAKE PHOTO</Text>
+              </TouchableOpacity>
+              <TextInput style={styles.input} placeholder="PHOTO URL (OPTIONAL)" placeholderTextColor="#666" value={newShoe.photoUrl} onChangeText={(text) => setNewShoe({ ...newShoe, photoUrl: text })} />
+              {newShoe.photoUrl ? <Image source={{ uri: newShoe.photoUrl }} style={styles.shoePreviewImage} /> : null}
               <TouchableOpacity style={styles.doneBtn} onPress={() => Keyboard.dismiss()}>
                 <Text style={styles.doneBtnText}>DONE</Text>
               </TouchableOpacity>
@@ -625,7 +759,7 @@ export default function App() {
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>LOG MILEAGE</Text>
                 <TouchableOpacity onPress={() => setShowAddLog(false)}>
-                  <Text style={styles.closeBtn}>X</Text>
+                  <Text style={styles.closeBtn}>✕</Text>
                 </TouchableOpacity>
               </View>
               <TextInput style={styles.input} placeholder="MILEAGE" placeholderTextColor="#666" keyboardType="decimal-pad" value={newLog.mileage} onChangeText={(text) => setNewLog({ ...newLog, mileage: text })} />
@@ -646,7 +780,7 @@ export default function App() {
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>ASSIGN WORKOUT</Text>
                 <TouchableOpacity onPress={() => { setShowAssignWorkout(false); setSelectedWorkout(null); }}>
-                  <Text style={styles.closeBtn}>X</Text>
+                  <Text style={styles.closeBtn}>✕</Text>
                 </TouchableOpacity>
               </View>
               {selectedWorkout && (
@@ -692,6 +826,7 @@ export default function App() {
 
         <ScrollView style={styles.content}>
           <Text style={styles.detailTitle}>{shoe.name}</Text>
+          {shoe.photoUrl ? <Image source={{ uri: shoe.photoUrl }} style={styles.detailShoeImage} /> : null}
           <Text style={styles.detailBrand}>{shoe.brand}</Text>
 
           <View style={styles.statsGrid}>
@@ -738,7 +873,7 @@ export default function App() {
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>LOG MILEAGE</Text>
                 <TouchableOpacity onPress={() => setShowAddLog(false)}>
-                  <Text style={styles.closeBtn}>X</Text>
+                  <Text style={styles.closeBtn}>✕</Text>
                 </TouchableOpacity>
               </View>
               <TextInput style={styles.input} placeholder="MILEAGE" placeholderTextColor="#666" keyboardType="decimal-pad" value={newLog.mileage} onChangeText={(text) => setNewLog({ ...newLog, mileage: text })} />
@@ -769,7 +904,7 @@ const styles = StyleSheet.create({
   doneBtnText: { color: '#000', fontWeight: 'bold', fontSize: 12 },
   toggleAuth: { textAlign: 'center', color: '#00ff00', fontSize: 11, marginTop: 10 },
   header: { backgroundColor: '#1a1a2e', borderBottomWidth: 3, borderBottomColor: '#ff00ff', borderTopWidth: 3, borderTopColor: '#0ff', padding: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 },
-  headerTitle: { fontSize: 14, fontWeight: 'bold', color: '#0ff', flex: 1 },
+  headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#0ff', flexShrink: 1, paddingRight: 8 },
   headerEmail: { fontSize: 10, color: '#ffff00', marginTop: 5 },
   headerStats: { alignItems: 'flex-end' },
   headerStat: { fontSize: 10, color: '#ffff00' },
@@ -824,6 +959,12 @@ const styles = StyleSheet.create({
   workoutTap: { fontSize: 9, color: '#ff00ff', fontWeight: 'bold' },
   workoutDetail: { fontSize: 12, color: '#0ff', marginBottom: 8, textAlign: 'center' },
   pickShoeText: { fontSize: 11, fontWeight: 'bold', color: '#ffff00', marginBottom: 10, textAlign: 'center' },
+  shoeInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  shoeThumb: { width: 42, height: 42, borderRadius: 6, borderWidth: 1, borderColor: '#00ff00' },
+  detailShoeImage: { width: 120, height: 120, borderRadius: 8, borderWidth: 2, borderColor: '#00ff00', marginVertical: 10, alignSelf: 'center' },
+  photoBtn: { backgroundColor: '#1a1a2e', borderWidth: 2, borderColor: '#ff00ff', padding: 12, borderRadius: 6, alignItems: 'center', marginBottom: 10 },
+  photoBtnText: { color: '#ffff00', fontWeight: 'bold' },
+  shoePreviewImage: { width: 90, height: 90, borderRadius: 8, alignSelf: 'center', marginBottom: 10, borderWidth: 2, borderColor: '#00ff00' },
   shoeOption: { backgroundColor: '#000', borderWidth: 2, borderColor: '#00ff00', padding: 12, marginBottom: 8 },
   shoeOptionText: { fontSize: 12, color: '#00ff00', fontWeight: 'bold' },
   achievementPopup: { position: 'absolute', top: 100, left: 20, right: 20, backgroundColor: '#ff00ff', borderWidth: 3, borderColor: '#ffff00', padding: 20, alignItems: 'center', zIndex: 999 },
@@ -843,6 +984,6 @@ const styles = StyleSheet.create({
   modalContent: { backgroundColor: '#000', borderTopWidth: 3, borderTopColor: '#0ff', padding: 20 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, borderBottomWidth: 2, borderBottomColor: '#ff00ff', paddingBottom: 10 },
   modalTitle: { fontSize: 14, fontWeight: 'bold', color: '#0ff' },
-  closeBtn: { fontSize: 18, color: '#ff0000', fontWeight: 'bold' },
+  closeBtn: { fontSize: 24, color: '#ff0000', fontWeight: 'bold', paddingHorizontal: 12, paddingVertical: 8 },
   title: { fontSize: 20, color: '#0ff', textAlign: 'center', marginTop: 20 },
 });
