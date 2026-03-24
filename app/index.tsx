@@ -4,6 +4,7 @@ import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, Tex
 import { initializeApp } from 'firebase/app';
 import { getAuth, initializeAuth, getReactNativePersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
@@ -31,6 +32,7 @@ const auth = (() => {
   }
 })();
 const db = getFirestore(app);
+const storage = getStorage(app);
 const resolveAppleHealthKit = () => {
   const candidates = [
     AppleHealthKitModule,
@@ -42,7 +44,8 @@ const resolveAppleHealthKit = () => {
     candidates.find(
       (candidate) =>
         typeof candidate.initHealthKit === 'function' ||
-        typeof candidate.getWorkouts === 'function'
+        typeof candidate.getWorkouts === 'function' ||
+        typeof candidate.getSamples === 'function'
     ) || candidates[0] || null
   );
 };
@@ -64,19 +67,30 @@ const getShoeLevel = (mileage) => {
   return { level: 1, name: 'NEW', color: '#ffff00', emoji: '✨' };
 };
 
-const RetroRunnerGif = () => {
+const RetroRunnerGif = ({ compact = false }) => {
   const [gifFailed, setGifFailed] = useState(false);
+  const [gifLoaded, setGifLoaded] = useState(false);
   const gifUrl = 'https://media.giphy.com/media/3o7TKtnuHOHHUjR38Y/giphy.gif';
 
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (!gifLoaded) {
+        setGifFailed(true);
+      }
+    }, 1800);
+    return () => clearTimeout(timeout);
+  }, [gifLoaded]);
+
   return (
-    <View style={styles.runnerGifWrap}>
+    <View style={compact ? styles.runnerGifWrapCompact : styles.runnerGifWrap}>
       {gifFailed ? (
-        <Text style={styles.runnerFallback}>🏃</Text>
+        <Text style={compact ? styles.runnerFallbackCompact : styles.runnerFallback}>🏃</Text>
       ) : (
         <Image
           source={{ uri: gifUrl }}
-          style={styles.runnerGif}
+          style={compact ? styles.runnerGifCompact : styles.runnerGif}
           contentFit="cover"
+          onLoad={() => setGifLoaded(true)}
           onError={() => setGifFailed(true)}
         />
       )}
@@ -101,6 +115,7 @@ export default function App() {
   const [showStats, setShowStats] = useState(false);
   const [showAssignWorkout, setShowAssignWorkout] = useState(false);
   const [selectedWorkout, setSelectedWorkout] = useState(null);
+  const [syncDays, setSyncDays] = useState(30);
   const [healthAuthorized, setHealthAuthorized] = useState(false);
   const [unlockedAchievement, setUnlockedAchievement] = useState(null);
   const [newShoe, setNewShoe] = useState({ name: '', brand: '', purchaseDate: '', targetMileage: '300', photoUrl: '' });
@@ -231,6 +246,22 @@ export default function App() {
       }
     } catch (error) {
       Alert.alert('Error', error?.message || String(error));
+    }
+  };
+
+  const uploadShoePhotoIfNeeded = async (uri) => {
+    if (!uri) return '';
+    if (!uri.startsWith('file://') && !uri.startsWith('ph://')) return uri;
+
+    try {
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      const storageRef = ref(storage, `users/${user.uid}/shoe-photos/${Date.now()}.jpg`);
+      await uploadBytes(storageRef, blob);
+      return await getDownloadURL(storageRef);
+    } catch (error) {
+      console.warn('Photo upload failed, keeping local URI:', error);
+      return uri;
     }
   };
 
@@ -371,10 +402,10 @@ export default function App() {
     setLoading(true);
     try {
       const now = new Date();
-      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const rangeStartDate = new Date(now.getTime() - syncDays * 24 * 60 * 60 * 1000);
 
       const options = {
-        startDate: thirtyDaysAgo.toISOString(),
+        startDate: rangeStartDate.toISOString(),
         endDate: now.toISOString(),
         ascending: false,
         limit: 100,
@@ -397,7 +428,7 @@ export default function App() {
         }
 
         if (!results || results.length === 0) {
-          Alert.alert('No workouts found', 'No workouts found in Apple Health for the last 30 days.');
+          Alert.alert('No workouts found', `No workouts found in Apple Health for the last ${syncDays} days.`);
           setLoading(false);
           return;
         }
@@ -494,6 +525,15 @@ export default function App() {
     }
   };
 
+  const handleDeleteWorkout = async (workoutId) => {
+    try {
+      await deleteDoc(doc(db, 'users', user.uid, 'health-workouts', workoutId));
+      setHealthWorkouts((prev) => prev.filter((item) => item.id !== workoutId));
+    } catch (error) {
+      Alert.alert('Error', error?.message || String(error));
+    }
+  };
+
   const handleAddShoe = async () => {
     if (!newShoe.name || !newShoe.brand) {
       Alert.alert('Error', 'Fill all fields');
@@ -501,16 +541,17 @@ export default function App() {
     }
 
     try {
+      const persistedPhotoUrl = await uploadShoePhotoIfNeeded(newShoe.photoUrl || '');
       const docRef = await addDoc(collection(db, 'users', user.uid, 'shoes'), {
         name: newShoe.name,
         brand: newShoe.brand,
         purchaseDate: newShoe.purchaseDate,
         targetMileage: parseFloat(newShoe.targetMileage),
-        photoUrl: newShoe.photoUrl || '',
+        photoUrl: persistedPhotoUrl,
         createdAt: new Date().toISOString(),
       });
 
-      const updatedShoes = [...shoes, { ...newShoe, id: docRef.id, targetMileage: parseFloat(newShoe.targetMileage), photoUrl: newShoe.photoUrl || '' }];
+      const updatedShoes = [...shoes, { ...newShoe, id: docRef.id, targetMileage: parseFloat(newShoe.targetMileage), photoUrl: persistedPhotoUrl }];
       setShoes(updatedShoes);
       if (updatedShoes.length === 3) {
         awardAchievement('collector');
@@ -634,6 +675,7 @@ export default function App() {
 
         <View style={styles.header}>
           <View style={styles.headerTitleWrap}>
+            <RetroRunnerGif compact />
             <Text style={styles.headerTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>SHOE TRACKER 10000</Text>
             <Text style={styles.headerEmail}>{user.email}</Text>
           </View>
@@ -771,7 +813,10 @@ export default function App() {
                         <Text style={styles.workoutMileage}>{workout.distance} MI</Text>
                         <Text style={styles.workoutDate}>{workout.date} • {workout.type}</Text>
                       </View>
-                      <Text style={styles.workoutTap}>TAP TO ASSIGN</Text>
+                      <View style={styles.workoutRightCol}>
+                        <Text style={styles.workoutTap}>TAP TO ASSIGN</Text>
+                        <TouchableOpacity onPress={() => handleDeleteWorkout(workout.id)}><Text style={styles.workoutDelete}>DELETE</Text></TouchableOpacity>
+                      </View>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -779,6 +824,13 @@ export default function App() {
 
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>HEALTH SYNC</Text>
+                <View style={styles.syncRangeRow}>
+                  {[30, 60, 90].map((days) => (
+                    <TouchableOpacity key={days} style={[styles.syncRangeBtn, syncDays === days && styles.syncRangeBtnActive]} onPress={() => setSyncDays(days)}>
+                      <Text style={[styles.syncRangeBtnText, syncDays !== days && styles.syncRangeBtnTextInactive]}>{days}D</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
                 <TouchableOpacity
                   style={!healthAuthorized ? styles.btnPrimary : styles.btnDisabled}
                   onPress={requestHealthKitPermission}
@@ -816,7 +868,7 @@ export default function App() {
         </ScrollView>
 
         <Modal visible={showAddShoe} transparent animationType="slide">
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.modalOverlay, styles.modalOverlayTop]}>
             <ScrollView contentContainerStyle={styles.modalScrollContent} keyboardShouldPersistTaps="handled">
             <View style={[styles.modalContent, styles.modalTopContent]}>
               <View style={styles.modalHeader}>
@@ -901,6 +953,10 @@ export default function App() {
 
   if (currentPage === 'detail' && selectedShoe) {
     const shoe = shoes.find(s => s.id === selectedShoe);
+    if (!shoe) {
+      setCurrentPage('dashboard');
+      return null;
+    }
     const shoeLogs = logs.filter(log => log.shoeId === selectedShoe);
     const totalMileage = getTotalMileage(selectedShoe);
     const level = getShoeLevel(parseFloat(totalMileage));
@@ -999,6 +1055,9 @@ const styles = StyleSheet.create({
   runnerGifWrap: { width: 140, height: 140, marginBottom: 20, borderWidth: 2, borderColor: '#0ff' },
   runnerGif: { width: '100%', height: '100%' },
   runnerFallback: { fontSize: 82, color: '#0ff', textAlign: 'center', lineHeight: 136 },
+  runnerGifWrapCompact: { width: 46, height: 46, marginBottom: 6, borderWidth: 1, borderColor: '#0ff' },
+  runnerGifCompact: { width: '100%', height: '100%' },
+  runnerFallbackCompact: { fontSize: 26, color: '#0ff', textAlign: 'center', lineHeight: 44 },
   header: { backgroundColor: '#10142a', borderBottomWidth: 3, borderBottomColor: '#ff00ff', borderTopWidth: 3, borderTopColor: '#0ff', paddingVertical: 18, paddingHorizontal: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 },
   headerTitleWrap: { flex: 1, minWidth: 0 },
   headerTitle: { fontSize: 16, fontWeight: '900', color: '#ffffff', flexShrink: 1, letterSpacing: 0.4 },
@@ -1059,6 +1118,8 @@ const styles = StyleSheet.create({
   workoutMileage: { fontSize: 14, fontWeight: 'bold', color: '#0ff' },
   workoutDate: { fontSize: 10, color: '#ffff00', marginTop: 3 },
   workoutTap: { fontSize: 9, color: '#ff00ff', fontWeight: 'bold' },
+  workoutRightCol: { alignItems: 'flex-end', gap: 6 },
+  workoutDelete: { fontSize: 9, color: '#ff7a7a', fontWeight: 'bold' },
   workoutDetail: { fontSize: 12, color: '#0ff', marginBottom: 8, textAlign: 'center' },
   pickShoeText: { fontSize: 11, fontWeight: 'bold', color: '#ffff00', marginBottom: 10, textAlign: 'center' },
   shoeOption: { backgroundColor: '#000', borderWidth: 2, borderColor: '#00ff00', padding: 12, marginBottom: 8 },
@@ -1078,8 +1139,9 @@ const styles = StyleSheet.create({
   logDate: { fontSize: 9, color: '#ffff00', marginTop: 3 },
   logMileage: { fontSize: 16, fontWeight: 'bold', color: '#00ff00' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'flex-end' },
+  modalOverlayTop: { justifyContent: 'flex-start', paddingTop: 40 },
   modalContent: { backgroundColor: '#000', borderTopWidth: 3, borderTopColor: '#0ff', padding: 20 },
-  modalScrollContent: { flexGrow: 1, justifyContent: 'flex-end' },
+  modalScrollContent: { flexGrow: 1, justifyContent: 'flex-start' },
   modalTopContent: { paddingBottom: 30 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, borderBottomWidth: 2, borderBottomColor: '#ff00ff', paddingBottom: 10 },
   modalTitle: { fontSize: 14, fontWeight: 'bold', color: '#0ff' },
@@ -1090,5 +1152,10 @@ const styles = StyleSheet.create({
   newShoePreview: { width: '100%', height: 150, borderWidth: 2, borderColor: '#0ff', marginBottom: 10, backgroundColor: '#111' },
   btnDanger: { backgroundColor: '#5a0f0f', borderWidth: 2, borderColor: '#ff5a5a', padding: 12, marginBottom: 12, alignItems: 'center' },
   btnDangerText: { color: '#ffd5d5', fontWeight: 'bold', fontSize: 12 },
+  syncRangeRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  syncRangeBtn: { borderWidth: 1, borderColor: '#0ff', paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#111' },
+  syncRangeBtnActive: { backgroundColor: '#0ff' },
+  syncRangeBtnText: { color: '#000', fontWeight: 'bold', fontSize: 10 },
+  syncRangeBtnTextInactive: { color: '#0ff' },
   title: { fontSize: 20, color: '#0ff', textAlign: 'center', marginTop: 20 },
 });
