@@ -13,13 +13,21 @@
 - Build: EAS Build with Expo
 
 ## Key Files
-- `app/index.tsx` - Complete iOS app (848 lines)
+- `app/index.tsx` - Complete iOS app logic (HealthKit auth/sync + gameplay)
 - `app.json` - Config with HealthKit entitlements + expo-build-properties plugin
-- GitHub: All commits tracked
+- `docs/ios-healthkit-go-live.md` - Operational go-live runbook
+- `scripts/healthkit_guardrails_check.sh` - Regression check for the 7 known failure modes
+- `scripts/healthkit_preflight.sh` - One-command preflight before spending an iOS EAS build
+
+## Regression-Prevention Checks (run before every iOS build)
+```bash
+./scripts/healthkit_guardrails_check.sh
+./scripts/healthkit_preflight.sh
+```
 
 ## Next Steps (HealthKit release path)
 1. Follow `docs/ios-healthkit-go-live.md` start-to-finish.
-2. Run `npx expo prebuild --platform ios --clean`.
+2. Run `./scripts/healthkit_preflight.sh`.
 3. Run `eas build --platform ios --profile production --clear-cache`.
 4. Install on real iPhone and complete in-app auth/sync flow.
 

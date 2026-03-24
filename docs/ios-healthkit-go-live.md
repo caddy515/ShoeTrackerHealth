@@ -2,6 +2,17 @@
 
 Use this checklist to get the HealthKit-connected build working on a real iPhone and ready for TestFlight.
 
+## 0) Always run guardrails first
+
+From repo root:
+
+```bash
+./scripts/healthkit_guardrails_check.sh
+./scripts/healthkit_preflight.sh
+```
+
+These scripts fail fast if any known HealthKit regression has reappeared.
+
 ## 1) Verify Apple capability
 
 1. Open **Apple Developer** → **Certificates, IDs & Profiles**.
@@ -14,6 +25,7 @@ Use this checklist to get the HealthKit-connected build working on a real iPhone
 This repo expects HealthKit under:
 - `expo.ios.entitlements.com.apple.developer.healthkit = true`
 - `expo-build-properties` iOS entitlements with the same key
+- `expo.newArchEnabled = false`
 
 ## 3) Regenerate native config and build
 
@@ -64,7 +76,19 @@ HealthKit requires real-device validation for reliable permission and workout re
   - Re-run EAS build after clearing cache.
   - Confirm bundle ID in App Store Connect / Apple Developer matches app config exactly.
 
-## 7) Release readiness checklist
+## 7) Why issues can "resurface" and how we prevent it
+
+Common causes:
+- Running checks from the wrong directory or stale local clone.
+- Local branch drift/rebase that dropped a subset of HealthKit commits.
+- EAS build using stale credentials/profiles after App ID capability changes.
+
+Prevention now in this repo:
+- `scripts/healthkit_guardrails_check.sh` enforces all 7 known failure modes as code-level assertions.
+- `scripts/healthkit_preflight.sh` validates environment, runs guardrails, lint, typecheck, and Expo config sanity before building.
+- README and this runbook now require these scripts before iOS EAS builds.
+
+## 8) Release readiness checklist
 
 - [ ] HealthKit enabled on App ID
 - [ ] Fresh EAS production build generated
