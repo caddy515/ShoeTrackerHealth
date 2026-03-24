@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Keyboard, Platform, KeyboardAvoidingView } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Keyboard, Platform, KeyboardAvoidingView, Dimensions } from 'react-native';
 import { initializeApp } from 'firebase/app';
 import { getAuth, initializeAuth, getReactNativePersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
@@ -8,6 +8,7 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const AppleHealthKitModule = require('rn-apple-healthkit');
 
@@ -99,6 +100,8 @@ const RetroRunnerGif = ({ compact = false }) => {
 };
 
 export default function App() {
+  const insets = useSafeAreaInsets();
+  const headerMinHeight = Math.round(Dimensions.get('window').height * 0.15);
   const [user, setUser] = useState(null);
   const [shoes, setShoes] = useState([]);
   const [logs, setLogs] = useState([]);
@@ -744,7 +747,7 @@ export default function App() {
           </View>
         )}
 
-        <View style={styles.header}>
+        <View style={[styles.header, { minHeight: headerMinHeight, paddingTop: Math.max(14, insets.top + 8) }]}>
           <View style={styles.headerTitleWrap}>
             <RetroRunnerGif compact />
             <Text style={styles.headerTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>SHOE TRACKER 10000</Text>
@@ -822,7 +825,7 @@ export default function App() {
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>SHOES READY TO PLAY</Text>
                   <TouchableOpacity style={styles.btnAdd} onPress={() => setShowAddShoe(true)}>
-                    <Text style={styles.btnAddText}>ADD</Text>
+                    <Text style={styles.btnAddText}>ADD SHOES</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -982,6 +985,7 @@ export default function App() {
                 </View>
                 <TextInput style={styles.input} placeholder="SHOE NAME" placeholderTextColor="#666" value={editingShoe?.name || ''} onChangeText={(text) => setEditingShoe((prev) => ({ ...(prev || {}), name: text }))} />
                 <TextInput style={styles.input} placeholder="BRAND" placeholderTextColor="#666" value={editingShoe?.brand || ''} onChangeText={(text) => setEditingShoe((prev) => ({ ...(prev || {}), brand: text }))} />
+                <TextInput style={styles.input} placeholder="SHOE LIFETIME (miles)" placeholderTextColor="#666" keyboardType="decimal-pad" value={String(editingShoe?.targetMileage || '300')} onChangeText={(text) => setEditingShoe((prev) => ({ ...(prev || {}), targetMileage: text }))} />
                 <TextInput style={styles.input} placeholder="PHOTO URL (optional)" placeholderTextColor="#666" value={editingShoe?.photoUrl || ''} onChangeText={(text) => setEditingShoe((prev) => ({ ...(prev || {}), photoUrl: text }))} />
                 {editingShoe?.photoUrl ? <Image source={{ uri: editingShoe.photoUrl }} style={styles.newShoePreview} contentFit="cover" /> : null}
                 <View style={styles.photoBtnRow}>
@@ -1066,7 +1070,7 @@ export default function App() {
 
     return (
       <View style={styles.container}>
-        <View style={styles.header}>
+        <View style={[styles.header, { minHeight: headerMinHeight, paddingTop: Math.max(14, insets.top + 8) }]}>
           <TouchableOpacity onPress={() => setCurrentPage('dashboard')}>
             <Text style={styles.backBtn}>MENU</Text>
           </TouchableOpacity>
@@ -1085,7 +1089,7 @@ export default function App() {
               <Text style={styles.statValue}>{totalMileage}</Text>
             </View>
             <View style={styles.statCard2}>
-              <Text style={styles.statLabel}>GOAL</Text>
+              <Text style={styles.statLabel}>SHOE LIFETIME</Text>
               <Text style={styles.statValue}>300</Text>
             </View>
             <View style={styles.statCard2}>
