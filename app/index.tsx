@@ -2,8 +2,10 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Keyboard, Platform } from 'react-native';
 import { initializeApp } from 'firebase/app';
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, initializeAuth, getReactNativePersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+const AppleHealthKitModule = require('rn-apple-healthkit');
 
 const firebaseConfig = {
   apiKey: "AIzaSyCS9OcckFBy2UbUGEn-Knp_TARNy8EBf5w",
@@ -15,7 +17,15 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+const auth = (() => {
+  try {
+    return initializeAuth(app, {
+      persistence: getReactNativePersistence(AsyncStorage),
+    });
+  } catch (error) {
+    return getAuth(app);
+  }
+})();
 const db = getFirestore(app);
 const resolveAppleHealthKit = () => {
   const candidates = [
@@ -238,8 +248,8 @@ export default function App() {
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
       const options = {
-        startDate: thirtyDaysAgo,
-        endDate: now,
+        startDate: thirtyDaysAgo.toISOString(),
+        endDate: now.toISOString(),
         ascending: false,
         limit: 100,
       };
