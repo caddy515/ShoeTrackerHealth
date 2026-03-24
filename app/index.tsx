@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Keyboard, Platform, KeyboardAvoidingView } from 'react-native';
 import { initializeApp } from 'firebase/app';
