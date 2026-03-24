@@ -6,7 +6,7 @@ import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
-const AppleHealthKitModule = require('rn-apple-healthkit');
+import * as AppleHealthKitModule from 'rn-apple-healthkit';
 
 
 const firebaseConfig = {
@@ -24,7 +24,7 @@ const auth = (() => {
     return initializeAuth(app, {
       persistence: getReactNativePersistence(AsyncStorage),
     });
-  } catch (error) {
+  } catch {
     return getAuth(app);
   }
 })();

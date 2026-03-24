@@ -6,5 +6,13 @@ module.exports = defineConfig([
   expoConfig,
   {
     ignores: ['dist/*'],
+    rules: {
+      'import/no-unresolved': [
+        'error',
+        {
+          ignore: ['^expo-image-picker$', '^@react-native-async-storage/async-storage$'],
+        },
+      ],
+    },
   },
 ]);
