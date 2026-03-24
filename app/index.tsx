@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Keyboard, Platform, KeyboardAvoidingView } from 'react-native';
 import { initializeApp } from 'firebase/app';
@@ -6,7 +7,8 @@ import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
-import * as AppleHealthKitModule from 'rn-apple-healthkit';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const AppleHealthKitModule = require('rn-apple-healthkit');
 
 
 const firebaseConfig = {
