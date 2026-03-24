@@ -112,6 +112,8 @@ export default function App() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [showAddShoe, setShowAddShoe] = useState(false);
   const [showAddLog, setShowAddLog] = useState(false);
+  const [showEditShoe, setShowEditShoe] = useState(false);
+  const [editingShoe, setEditingShoe] = useState(null);
   const [showStats, setShowStats] = useState(false);
   const [showAssignWorkout, setShowAssignWorkout] = useState(false);
   const [selectedWorkout, setSelectedWorkout] = useState(null);
@@ -262,6 +264,49 @@ export default function App() {
     } catch (error) {
       console.warn('Photo upload failed, keeping local URI:', error);
       return uri;
+    }
+  };
+
+  const pickEditShoePhotoFromLibrary = async () => {
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission needed', 'Please allow photo library access to add a shoe photo.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.7,
+      });
+
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        setEditingShoe((prev) => (prev ? { ...prev, photoUrl: result.assets[0].uri } : prev));
+      }
+    } catch (error) {
+      Alert.alert('Error', error?.message || String(error));
+    }
+  };
+
+  const takeEditShoePhotoWithCamera = async () => {
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission needed', 'Please allow camera access to take a shoe photo.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: true,
+        quality: 0.7,
+      });
+
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        setEditingShoe((prev) => (prev ? { ...prev, photoUrl: result.assets[0].uri } : prev));
+      }
+    } catch (error) {
+      Alert.alert('Error', error?.message || String(error));
     }
   };
 
@@ -564,6 +609,32 @@ export default function App() {
     }
   };
 
+  const handleSaveShoeEdits = async () => {
+    if (!editingShoe?.id || !editingShoe?.name || !editingShoe?.brand) {
+      Alert.alert('Error', 'Shoe must have a name and brand.');
+      return;
+    }
+
+    try {
+      const persistedPhotoUrl = await uploadShoePhotoIfNeeded(editingShoe.photoUrl || '');
+      const payload = {
+        name: editingShoe.name,
+        brand: editingShoe.brand,
+        purchaseDate: editingShoe.purchaseDate || '',
+        targetMileage: parseFloat(editingShoe.targetMileage || '300'),
+        photoUrl: persistedPhotoUrl,
+      };
+
+      await setDoc(doc(db, 'users', user.uid, 'shoes', editingShoe.id), payload, { merge: true });
+      setShoes((prev) => prev.map((shoe) => (shoe.id === editingShoe.id ? { ...shoe, ...payload } : shoe)));
+      setShowEditShoe(false);
+      setEditingShoe(null);
+      Keyboard.dismiss();
+    } catch (error) {
+      Alert.alert('Error', error?.message || String(error));
+    }
+  };
+
   const handleAddLog = async () => {
     if (!newLog.shoeId || !newLog.mileage) {
       Alert.alert('Error', 'Select shoe and mileage');
@@ -687,7 +758,7 @@ export default function App() {
 
         <View style={styles.headerButtons}>
           <TouchableOpacity style={styles.btn} onPress={() => setShowStats(!showStats)}>
-            <Text style={styles.btnText}>📊 SCORECARD</Text>
+            <Text style={styles.btnText}>{showStats ? '🏠 MAIN MENU' : '📊 SCORECARD'}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.btn} onPress={handleLogout}>
             <Text style={styles.btnText}>EXIT</Text>
@@ -749,7 +820,7 @@ export default function App() {
 
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>YOUR ARSENAL</Text>
+                  <Text style={styles.sectionTitle}>SHOES READY TO PLAY</Text>
                   <TouchableOpacity style={styles.btnAdd} onPress={() => setShowAddShoe(true)}>
                     <Text style={styles.btnAddText}>ADD</Text>
                   </TouchableOpacity>
@@ -774,6 +845,9 @@ export default function App() {
                           <View style={[styles.shoeLevelBadge, { backgroundColor: level.color }]}>
                             <Text style={styles.shoeLevelText}>{level.emoji} LV {level.level}</Text>
                           </View>
+                          <TouchableOpacity style={styles.editShoeBtn} onPress={() => { setEditingShoe({ ...shoe, targetMileage: String(shoe.targetMileage || '300') }); setShowEditShoe(true); }}>
+                            <Text style={styles.editShoeBtnText}>EDIT</Text>
+                          </TouchableOpacity>
                           <TouchableOpacity style={styles.deleteShoeBtn} onPress={() => handleDeleteShoe(shoe.id)}>
                             <Text style={styles.deleteShoeBtnText}>DELETE</Text>
                           </TouchableOpacity>
@@ -896,6 +970,35 @@ export default function App() {
           </KeyboardAvoidingView>
         </Modal>
 
+        <Modal visible={showEditShoe} transparent animationType="slide">
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.modalOverlay, styles.modalOverlayTop]}>
+            <ScrollView contentContainerStyle={styles.modalScrollContent} keyboardShouldPersistTaps="handled">
+              <View style={[styles.modalContent, styles.modalTopContent]}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>EDIT SHOE</Text>
+                  <TouchableOpacity onPress={() => { setShowEditShoe(false); setEditingShoe(null); }}>
+                    <Text style={styles.closeBtn}>X</Text>
+                  </TouchableOpacity>
+                </View>
+                <TextInput style={styles.input} placeholder="SHOE NAME" placeholderTextColor="#666" value={editingShoe?.name || ''} onChangeText={(text) => setEditingShoe((prev) => ({ ...(prev || {}), name: text }))} />
+                <TextInput style={styles.input} placeholder="BRAND" placeholderTextColor="#666" value={editingShoe?.brand || ''} onChangeText={(text) => setEditingShoe((prev) => ({ ...(prev || {}), brand: text }))} />
+                <TextInput style={styles.input} placeholder="PHOTO URL (optional)" placeholderTextColor="#666" value={editingShoe?.photoUrl || ''} onChangeText={(text) => setEditingShoe((prev) => ({ ...(prev || {}), photoUrl: text }))} />
+                {editingShoe?.photoUrl ? <Image source={{ uri: editingShoe.photoUrl }} style={styles.newShoePreview} contentFit="cover" /> : null}
+                <View style={styles.photoBtnRow}>
+                  <TouchableOpacity style={styles.photoBtn} onPress={pickEditShoePhotoFromLibrary}><Text style={styles.photoBtnText}>LIBRARY</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.photoBtn} onPress={takeEditShoePhotoWithCamera}><Text style={styles.photoBtnText}>CAMERA</Text></TouchableOpacity>
+                </View>
+                <TouchableOpacity style={styles.doneBtn} onPress={() => Keyboard.dismiss()}>
+                  <Text style={styles.doneBtnText}>DONE</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.submitBtn} onPress={handleSaveShoeEdits}>
+                  <Text style={styles.submitBtnText}>SAVE SHOE</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </Modal>
+
         <Modal visible={showAddLog} transparent animationType="slide">
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
             <View style={[styles.modalContent, styles.modalTopContent]}>
@@ -996,6 +1099,9 @@ export default function App() {
           </View>
 
           <TouchableOpacity style={styles.btnDanger} onPress={() => handleDeleteShoe(selectedShoe)}><Text style={styles.btnDangerText}>DELETE SHOE</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.btnPrimary} onPress={() => { setEditingShoe({ ...shoe, targetMileage: String(shoe.targetMileage || '300') }); setShowEditShoe(true); }}>
+            <Text style={styles.btnPrimaryText}>EDIT SHOE</Text>
+          </TouchableOpacity>
 
           <TouchableOpacity style={styles.btnPrimary} onPress={() => { setNewLog({ ...newLog, shoeId: selectedShoe }); setShowAddLog(true); }}>
             <Text style={styles.btnPrimaryText}>LOG MILEAGE</Text>
@@ -1108,6 +1214,8 @@ const styles = StyleSheet.create({
   shoeLevelText: { fontSize: 10, fontWeight: 'bold', color: '#000' },
   deleteShoeBtn: { backgroundColor: '#5a0f0f', borderWidth: 1, borderColor: '#ff5a5a', paddingHorizontal: 10, paddingVertical: 5 },
   deleteShoeBtnText: { color: '#ffd5d5', fontSize: 9, fontWeight: 'bold' },
+  editShoeBtn: { backgroundColor: '#102a5a', borderWidth: 1, borderColor: '#5aa2ff', paddingHorizontal: 10, paddingVertical: 5 },
+  editShoeBtnText: { color: '#d5e8ff', fontSize: 9, fontWeight: 'bold' },
   progressBar: { height: 10, backgroundColor: '#000', borderWidth: 1, borderColor: '#0ff', marginBottom: 8, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: '#00ff00' },
   progressLabel: { flexDirection: 'row', justifyContent: 'space-between', fontSize: 9, color: '#ffff00', marginBottom: 10 },
