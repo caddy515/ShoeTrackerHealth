@@ -25,6 +25,24 @@
 ./scripts/healthkit_preflight.sh
 ```
 
+Equivalent npm shortcuts:
+
+```bash
+npm run healthkit:check
+npm run healthkit:preflight
+```
+
+If npm says `Missing script: "healthkit:preflight"` you are not on a recent repo state. Run:
+
+```bash
+git fetch --all
+git checkout work
+git pull --ff-only
+npm run
+```
+
+You should then see `healthkit:check` and `healthkit:preflight` in the script list.
+
 ## Next Steps (HealthKit release path)
 1. Follow `docs/ios-healthkit-go-live.md` start-to-finish.
 2. Run `./scripts/healthkit_preflight.sh`.

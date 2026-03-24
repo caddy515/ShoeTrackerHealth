@@ -10,7 +10,10 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "healthkit:check": "./scripts/healthkit_guardrails_check.sh",
-    "healthkit:preflight": "./scripts/healthkit_preflight.sh"
+    "healthkit:preflight": "./scripts/healthkit_preflight.sh",
+    "healthkit-check": "npm run healthkit:check",
+    "healthkit-preflight": "npm run healthkit:preflight",
+    "preflight": "npm run healthkit:preflight"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

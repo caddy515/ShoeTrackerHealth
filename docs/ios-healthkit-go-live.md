@@ -11,6 +11,13 @@ From repo root:
 ./scripts/healthkit_preflight.sh
 ```
 
+NPM aliases are also available:
+
+```bash
+npm run healthkit:check
+npm run healthkit:preflight
+```
+
 These scripts fail fast if any known HealthKit regression has reappeared.
 
 ## 1) Verify Apple capability
