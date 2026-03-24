@@ -65,15 +65,21 @@ const getShoeLevel = (mileage) => {
 };
 
 const RetroRunnerGif = () => {
+  const [gifFailed, setGifFailed] = useState(false);
   const gifUrl = 'https://media.giphy.com/media/3o7TKtnuHOHHUjR38Y/giphy.gif';
 
   return (
     <View style={styles.runnerGifWrap}>
-      <Image
-        source={{ uri: gifUrl }}
-        style={styles.runnerGif}
-        contentFit="cover"
-      />
+      {gifFailed ? (
+        <Text style={styles.runnerFallback}>🏃</Text>
+      ) : (
+        <Image
+          source={{ uri: gifUrl }}
+          style={styles.runnerGif}
+          contentFit="cover"
+          onError={() => setGifFailed(true)}
+        />
+      )}
     </View>
   );
 };
@@ -268,7 +274,7 @@ export default function App() {
       }
 
       const healthKit = resolveAppleHealthKit();
-      console.log('HealthKit module keys:', Object.keys(healthKit || {}), 'init:', typeof healthKit?.initHealthKit, 'workouts:', typeof healthKit?.getWorkouts);
+      console.log('HealthKit module keys:', Object.keys(healthKit || {}), 'init:', typeof healthKit?.initHealthKit, 'workouts:', typeof healthKit?.getWorkouts, 'samples:', typeof healthKit?.getSamples);
 
       if (!healthKit || typeof healthKit.initHealthKit !== 'function') {
         Alert.alert(
@@ -309,6 +315,8 @@ export default function App() {
       workout?.distance ??
       workout?.totalDistance ??
       workout?.distanceWalkingRunning ??
+      workout?.quantity ??
+      workout?.value ??
       workout?.metadata?.distance;
 
     const distance = Number(possibleDistance);
@@ -328,6 +336,20 @@ export default function App() {
     const activity = workout?.activityName || workout?.workoutActivityType || workout?.type || 'workout';
     const distance = getWorkoutDistanceMeters(workout);
     return `${start}|${duration}|${activity}|${distance}`;
+  };
+
+  const getHealthKitWorkouts = (healthKit, options, callback) => {
+    if (typeof healthKit?.getWorkouts === 'function') {
+      healthKit.getWorkouts(options, callback);
+      return;
+    }
+
+    if (typeof healthKit?.getSamples === 'function') {
+      healthKit.getSamples({ ...options, type: 'Workout' }, callback);
+      return;
+    }
+
+    callback(new Error('HealthKit workout APIs unavailable'), null);
   };
 
   const syncWorkouts = async () => {
@@ -360,13 +382,13 @@ export default function App() {
 
       const healthKit = resolveAppleHealthKit();
 
-      if (!healthKit || typeof healthKit.getWorkouts !== 'function') {
+      if (!healthKit || (typeof healthKit.getWorkouts !== 'function' && typeof healthKit.getSamples !== 'function')) {
         Alert.alert('HealthKit unavailable', 'This build does not include Apple Health workout APIs.');
         setLoading(false);
         return;
       }
 
-      healthKit.getWorkouts(options, async (err, results) => {
+      getHealthKitWorkouts(healthKit, options, async (err, results) => {
         if (err) {
           console.error('Get workouts error:', err);
           Alert.alert('Error', 'Could not fetch workouts from Apple Health');
@@ -611,8 +633,8 @@ export default function App() {
         )}
 
         <View style={styles.header}>
-          <View>
-            <Text style={styles.headerTitle}>SHOE TRACKER 10000</Text>
+          <View style={styles.headerTitleWrap}>
+            <Text style={styles.headerTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>SHOE TRACKER 10000</Text>
             <Text style={styles.headerEmail}>{user.email}</Text>
           </View>
           <View style={styles.headerStats}>
@@ -794,8 +816,9 @@ export default function App() {
         </ScrollView>
 
         <Modal visible={showAddShoe} transparent animationType="slide">
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+            <ScrollView contentContainerStyle={styles.modalScrollContent} keyboardShouldPersistTaps="handled">
+            <View style={[styles.modalContent, styles.modalTopContent]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>ADD SHOE</Text>
                 <TouchableOpacity onPress={() => setShowAddShoe(false)}>
@@ -817,7 +840,8 @@ export default function App() {
                 <Text style={styles.submitBtnText}>ADD SHOE</Text>
               </TouchableOpacity>
             </View>
-          </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
         </Modal>
 
         <Modal visible={showAddLog} transparent animationType="slide">
@@ -974,8 +998,10 @@ const styles = StyleSheet.create({
   toggleAuth: { textAlign: 'center', color: '#00ff00', fontSize: 11, marginTop: 10 },
   runnerGifWrap: { width: 140, height: 140, marginBottom: 20, borderWidth: 2, borderColor: '#0ff' },
   runnerGif: { width: '100%', height: '100%' },
+  runnerFallback: { fontSize: 82, color: '#0ff', textAlign: 'center', lineHeight: 136 },
   header: { backgroundColor: '#10142a', borderBottomWidth: 3, borderBottomColor: '#ff00ff', borderTopWidth: 3, borderTopColor: '#0ff', paddingVertical: 18, paddingHorizontal: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 },
-  headerTitle: { fontSize: 18, fontWeight: '900', color: '#ffffff', flex: 1, letterSpacing: 0.4 },
+  headerTitleWrap: { flex: 1, minWidth: 0 },
+  headerTitle: { fontSize: 16, fontWeight: '900', color: '#ffffff', flexShrink: 1, letterSpacing: 0.4 },
   headerEmail: { fontSize: 10, color: '#ffff00', marginTop: 5 },
   headerStats: { alignItems: 'flex-end' },
   headerStat: { fontSize: 10, color: '#ffff00' },
@@ -1053,6 +1079,7 @@ const styles = StyleSheet.create({
   logMileage: { fontSize: 16, fontWeight: 'bold', color: '#00ff00' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: '#000', borderTopWidth: 3, borderTopColor: '#0ff', padding: 20 },
+  modalScrollContent: { flexGrow: 1, justifyContent: 'flex-end' },
   modalTopContent: { paddingBottom: 30 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, borderBottomWidth: 2, borderBottomColor: '#ff00ff', paddingBottom: 10 },
   modalTitle: { fontSize: 14, fontWeight: 'bold', color: '#0ff' },
