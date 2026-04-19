@@ -1,0 +1,105 @@
+SHOE TRACKER 10000 - SESSION SUMMARY
+Date: 2026-04-19
+
+IMPORTANT LINKS
+- Production build 27:
+  https://expo.dev/accounts/caddy515/projects/ShoeTrackerHealth/builds/edaf4941-39df-4e10-996a-05101db80d3e
+- TestFlight submission for build 27:
+  https://expo.dev/accounts/caddy515/projects/ShoeTrackerHealth/submissions/ca8014be-e1f4-4bdb-87f4-6385631ba430
+- Previous production build 26:
+  https://expo.dev/accounts/caddy515/projects/ShoeTrackerHealth/builds/3f719b02-4b00-48d0-89c9-e5c69470ef37
+- Previous TestFlight submission for build 26:
+  https://expo.dev/accounts/caddy515/projects/ShoeTrackerHealth/submissions/4d173169-9ac0-460c-9a48-707227bc9bb5
+
+CURRENT APP NAME
+- SHOE TRACKER 10000
+
+MAIN FILES TO KNOW
+- App logic/UI:
+  /Users/evanluscher/ShoeTrackerHealth/app/index.tsx
+- App config:
+  /Users/evanluscher/ShoeTrackerHealth/app.json
+- EAS config:
+  /Users/evanluscher/ShoeTrackerHealth/eas.json
+- HealthKit guardrails:
+  /Users/evanluscher/ShoeTrackerHealth/scripts/healthkit_guardrails_check.sh
+- HealthKit preflight:
+  /Users/evanluscher/ShoeTrackerHealth/scripts/healthkit_preflight.sh
+- HealthKit package patch:
+  /Users/evanluscher/ShoeTrackerHealth/scripts/patch_rn_apple_healthkit_workout_permission.js
+- Easter egg note:
+  /Users/evanluscher/ShoeTrackerHealth/easter-egg/README.md
+
+WHAT IS IN PLACE NOW
+- Apple Health authorization works again with workout-only permissions.
+- Health sync uses Apple Health Workouts only.
+- Import Preview is the main import flow.
+- If auto sync finds nothing new, Import Preview now shows:
+  NOTHING NEW TO IMPORT
+  and a bottom GO BACK TO MAIN MENU button.
+- Import Preview now also has a bottom GO BACK TO MAIN MENU button even when workouts are available.
+- Main menu Health Sync section shows:
+  AUTO SYNC ACTIVE, EDIT IN MY PROFILE
+  when automatic sync on app open is enabled.
+- Main menu top stat cards now say SHOES, MILES, LOGS without emojis.
+- Main menu header keeps HELP visible in both Main Menu and Scorecard views.
+- Main menu header coin icon is aligned next to the coin count again.
+- Scorecard page has HOW TO EARN COINS, WHAT COINS GET YOU, and the level list moved to the bottom.
+- Shoe detail header was simplified to BACK TO MAIN MENU only, with a tighter header height.
+- Shoe detail purchase date displays with the year on a second line.
+- Shoe detail age of shoe shows in the format:
+  2YR, 2MTH
+- Purchase date input keeps leading zeroes while typing, but saved/displayed dates normalize like 1/1/2020.
+- Shoe cards have the SHOE LIFE METER label above the existing slider.
+- iPad support was turned off:
+  app.json -> ios.supportsTablet = false
+- eas.json was updated so iOS submit profile uses:
+  submit.production.ios.ascAppId = 6761034611
+
+CHECK STATUS
+- npm run healthkit:check
+  Passed
+- npm run healthkit:preflight
+  Passed
+
+CURRENT REPO STATE
+- Files are saved locally in this repo.
+- There are many local modified/untracked files.
+- No git commit was created in this session.
+
+UNCOMMITTED FILES TO BE AWARE OF
+- app.json
+- app/index.tsx
+- eas.json
+- docs/ios-healthkit-go-live.md
+- eslint.config.js
+- package-lock.json
+- package.json
+- scripts/healthkit_guardrails_check.sh
+- tsconfig.json
+- assets/fonts/
+- assets/images/
+- easter-egg/
+- scripts/generate_retro_runner_gif.js
+- scripts/patch_rn_apple_healthkit_workout_permission.js
+
+TESTFLIGHT / TEAM NOTES
+- App Store Connect app ID:
+  6761034611
+- Internal testers are managed in:
+  App Store Connect -> TestFlight -> Internal Testing
+
+HOW TO PICK UP NEXT TIME
+- Reopen this repo:
+  /Users/evanluscher/ShoeTrackerHealth
+- Read this file first:
+  /Users/evanluscher/ShoeTrackerHealth/SESSION_SUMMARY.txt
+- Then check git status:
+  git status --short
+- If working on App Store / TestFlight, start from the build/submission links above.
+- If working on code, the main file is:
+  /Users/evanluscher/ShoeTrackerHealth/app/index.tsx
+
+REMINDER
+- Closing this terminal will not delete your local files.
+- EAS/TestFlight work that was already scheduled on Expo/Apple continues remotely.

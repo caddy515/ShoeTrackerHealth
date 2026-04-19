@@ -78,6 +78,12 @@ HealthKit requires real-device validation for reliable permission and workout re
   - The sync window is the last 30 days.
   - Confirm workouts exist in Apple Health inside that range.
 
+- **"error getting samples" / "Could not fetch workouts from Apple Health"**
+  - Confirm the app has **Workout** read access in the Health app, not just distance access.
+  - Confirm workouts exist in Apple Health for the selected sync window.
+  - Reinstall the app and re-authorize Health permissions if the permission prompt was previously denied.
+  - If this appears only on one build, rebuild after preflight so the native HealthKit module and app config stay aligned.
+
 - **Build succeeds but Health auth fails immediately**
   - Re-check App ID capability in Apple Developer.
   - Re-run EAS build after clearing cache.
