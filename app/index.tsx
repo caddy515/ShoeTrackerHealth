@@ -2,9 +2,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Keyboard, Platform, KeyboardAvoidingView, Dimensions } from 'react-native';
 import { initializeApp } from 'firebase/app';
-import { getAuth, initializeAuth, getReactNativePersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential, sendPasswordResetEmail } from 'firebase/auth';
+import { getAuth, initializeAuth, getReactNativePersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential, sendPasswordResetEmail, deleteUser } from 'firebase/auth';
 import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, uploadBytes, getDownloadURL, listAll, deleteObject } from 'firebase/storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -273,6 +273,7 @@ export default function App() {
   const [newShoe, setNewShoe] = useState({ name: '', brand: '', purchaseDate: '', targetMileage: '300', photoUrl: '' });
   const [newLog, setNewLog] = useState({ shoeId: '', mileage: '', date: new Date().toISOString().split('T')[0], notes: '' });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [deleteAccountPassword, setDeleteAccountPassword] = useState('');
   const [busyMessage, setBusyMessage] = useState('');
   const [isSyncingWorkouts, setIsSyncingWorkouts] = useState(false);
   const [datePickerState, setDatePickerState] = useState({ visible: false, target: null, monthCursor: new Date() });
@@ -686,6 +687,7 @@ export default function App() {
       setShowStats(false);
       setCurrentPage('dashboard');
       setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setDeleteAccountPassword('');
     } catch (error) {
       Alert.alert('Error', error?.message || String(error));
     }
@@ -1665,6 +1667,97 @@ export default function App() {
     }
   };
 
+  const deleteUserCollectionDocs = async (userId, collectionName) => {
+    const snapshot = await getDocs(query(collection(db, 'users', userId, collectionName)));
+    for (const docSnapshot of snapshot.docs) {
+      await deleteDoc(docSnapshot.ref);
+    }
+  };
+
+  const deleteStoragePhotoByUrl = async (photoUrl) => {
+    if (!photoUrl || String(photoUrl).startsWith('file://')) {
+      return;
+    }
+
+    try {
+      await deleteObject(ref(storage, photoUrl));
+    } catch (error) {
+      console.warn('Account deletion photo cleanup skipped:', error);
+    }
+  };
+
+  const deleteUserStoragePhotos = async (userId) => {
+    try {
+      const photoFolderRef = ref(storage, `users/${userId}/shoe-photos`);
+      const listedPhotos = await listAll(photoFolderRef);
+      for (const itemRef of listedPhotos.items) {
+        await deleteObject(itemRef);
+      }
+    } catch (error) {
+      console.warn('Account deletion storage cleanup skipped:', error);
+    }
+  };
+
+  const deleteUserAppData = async (userId) => {
+    const shoeSnapshot = await getDocs(query(collection(db, 'users', userId, 'shoes')));
+    await deleteUserCollectionDocs(userId, 'logs');
+    await deleteUserCollectionDocs(userId, 'health-workouts');
+    await deleteUserCollectionDocs(userId, 'gameStats');
+    for (const docSnapshot of shoeSnapshot.docs) {
+      await deleteStoragePhotoByUrl(docSnapshot.data()?.photoUrl);
+      await deleteDoc(docSnapshot.ref);
+    }
+    await deleteDoc(doc(db, 'users', userId));
+    await deleteUserStoragePhotos(userId);
+  };
+
+  const confirmDeleteAccount = async () => {
+    if (!user?.email || !auth.currentUser) {
+      Alert.alert('Error', 'No signed-in user found.');
+      return;
+    }
+
+    if (!deleteAccountPassword) {
+      Alert.alert('Password required', 'Enter your current password before deleting your account.');
+      return;
+    }
+
+    try {
+      Keyboard.dismiss();
+      setBusyMessage('Deleting account...');
+      const userId = auth.currentUser.uid;
+      const credential = EmailAuthProvider.credential(user.email, deleteAccountPassword);
+      await reauthenticateWithCredential(auth.currentUser, credential);
+      await deleteUserAppData(userId);
+      await deleteUser(auth.currentUser);
+
+      setShoes([]);
+      setLogs([]);
+      setHealthWorkouts([]);
+      setGameStats({ coins: 0, achievements: [], healthLinked: false, autoSyncHealthOnOpen: false });
+      setHealthAuthorized(false);
+      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setDeleteAccountPassword('');
+      setCurrentPage('login');
+      Alert.alert('Account deleted', 'Your account and Shoe Tracker 10000 data have been deleted.');
+    } catch (error) {
+      Alert.alert('Account deletion failed', error?.message || String(error));
+    } finally {
+      setBusyMessage('');
+    }
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete account',
+      'This permanently deletes your account, shoes, run logs, Apple Health workout imports, game stats, and uploaded shoe photos. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete account', style: 'destructive', onPress: confirmDeleteAccount },
+      ]
+    );
+  };
+
   const awardAchievement = async (achievementId) => {
     if (!gameStats.achievements || !gameStats.achievements.includes(achievementId)) {
       const achievement = ACHIEVEMENTS[achievementId];
@@ -2290,6 +2383,16 @@ export default function App() {
             </TouchableOpacity>
           </View>
 
+          <View style={styles.statsCard}>
+            <Text style={styles.statsTitle}>DELETE ACCOUNT</Text>
+            <Text style={styles.accountDeleteCopy}>Permanently deletes your account, shoes, run logs, Apple Health imports, game stats, and uploaded shoe photos.</Text>
+            <Text style={styles.fieldLabel}>CURRENT PASSWORD</Text>
+            <TextInput style={styles.input} placeholder="CURRENT PASSWORD" placeholderTextColor="#666" secureTextEntry value={deleteAccountPassword} onChangeText={setDeleteAccountPassword} />
+            <TouchableOpacity style={styles.btnDanger} onPress={handleDeleteAccount}>
+              <Text style={styles.btnDangerText}>DELETE ACCOUNT</Text>
+            </TouchableOpacity>
+          </View>
+
           <TouchableOpacity style={styles.btnDanger} onPress={handleLogout}>
             <Text style={styles.btnDangerText}>LOG OFF</Text>
           </TouchableOpacity>
@@ -2901,6 +3004,7 @@ const styles = StyleSheet.create({
   logActionCol: { alignItems: 'flex-end', justifyContent: 'center', gap: 8 },
   logActionEdit: { fontSize: 9, color: '#5aa2ff', fontWeight: 'bold', fontFamily: ARCADE_FONT_FAMILY },
   profileEmailText: { color: '#0ff', fontSize: 13, fontWeight: 'bold', fontFamily: ARCADE_FONT_FAMILY, lineHeight: 20 },
+  accountDeleteCopy: { color: '#ffd5d5', fontSize: 10, lineHeight: 17, marginBottom: 12, fontFamily: ARCADE_FONT_FAMILY },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'flex-end' },
   modalOverlayTop: { justifyContent: 'flex-start', paddingTop: 40 },
   modalContent: { backgroundColor: '#000', borderTopWidth: 3, borderTopColor: '#0ff', padding: 20 },

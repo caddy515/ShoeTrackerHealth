@@ -16,8 +16,10 @@
       },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Shoe Tracker 10000 uses the camera only when you choose to take a photo of a running shoe, for example to show that shoe on its detail card and mileage tracker.",
         "NSHealthShareUsageDescription": "We need access to your health data to track running workouts",
-        "NSHealthUpdateUsageDescription": "We need permission to read your running workouts from Apple Health"
+        "NSHealthUpdateUsageDescription": "We need permission to read your running workouts from Apple Health",
+        "NSPhotoLibraryUsageDescription": "Shoe Tracker 10000 uses your photo library only when you choose a shoe photo, for example to display that shoe in your active and retired shoe lists."
       }
     },
     "android": {
