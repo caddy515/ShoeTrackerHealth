@@ -54,7 +54,27 @@ echo "---- 2) New architecture compatibility ----"
 require_pattern app.json '"newArchEnabled"\s*:\s*false' \
   "newArchEnabled is disabled"
 
-echo "---- 3) Native module / Expo Go guardrails ----"
+echo "---- 3) iPhone-only App Store target ----"
+require_pattern app.json '"supportsTablet"\s*:\s*false' \
+  "app.json disables tablet support"
+if [ -e ios/ShoeTrackerHealth.xcodeproj/project.pbxproj ]; then
+  require_pattern ios/ShoeTrackerHealth.xcodeproj/project.pbxproj 'TARGETED_DEVICE_FAMILY = 1;' \
+    "native iOS target is iPhone-only"
+  forbid_pattern ios/ShoeTrackerHealth.xcodeproj/project.pbxproj 'TARGETED_DEVICE_FAMILY = "1,2";' \
+    "native iOS target does not advertise iPad support"
+else
+  pass "native iOS project absent; Expo prebuild will use app.json tablet setting"
+fi
+if [ -e ios/ShoeTrackerHealth/Info.plist ]; then
+  require_pattern ios/ShoeTrackerHealth/Info.plist '<key>UIRequiresFullScreen</key>' \
+    "Info.plist declares full-screen behavior"
+else
+  pass "native Info.plist absent; Expo prebuild will generate it"
+fi
+require_pattern app/index.tsx 'isIpadDevice' \
+  "runtime iPad Health sync guard exists"
+
+echo "---- 4) Native module / Expo Go guardrails ----"
 require_pattern app/index.tsx 'const resolveAppleHealthKit\s*=' \
   "resolveAppleHealthKit helper exists"
 require_pattern app/index.tsx 'HealthKit unavailable' \
@@ -70,7 +90,7 @@ require_pattern app/index.tsx 'const LOADING_IMAGE' \
 forbid_pattern app/index.tsx 'giphy\.com|media\.giphy\.com' \
   "app does not depend on remote GIF hosting"
 
-echo "---- 4) Permission robustness ----"
+echo "---- 5) Permission robustness ----"
 require_pattern app/index.tsx "Platform\\.OS !== 'ios'" \
   "iOS-only guard present"
 require_pattern app/index.tsx 'initHealthKit' \
@@ -86,7 +106,7 @@ forbid_pattern app/index.tsx "callHealthKitCallbackMethod\\(healthKit, 'isAvaila
 forbid_pattern app/index.tsx 'DistanceWalkingRunning|HKQuantityTypeIdentifierDistanceWalkingRunning|StepCount|ActiveEnergyBurned' \
   "workout-only sync does not request distance, steps, or active energy permissions"
 
-echo "---- 5) Sync reliability / dedupe ----"
+echo "---- 6) Sync reliability / dedupe ----"
 require_pattern app/index.tsx 'getWorkoutDistanceMeters' \
   "distance normalization helper exists"
 require_pattern app/index.tsx 'getWorkoutStartDate' \
@@ -161,8 +181,16 @@ require_pattern app/index.tsx 'describeHealthKitReadError' \
   "specific HealthKit read error helper exists"
 require_pattern app/index.tsx 'Apple Health sync failed' \
   "user-facing workout fetch failure alert exists"
+require_pattern app/index.tsx 'clearHealthLinkState' \
+  "Health link state can be cleared after external permission changes"
+require_pattern app/index.tsx 'validateStoredHealthAccess' \
+  "stored Health access is validated on app launch"
+require_pattern app/index.tsx 'AppState\.addEventListener' \
+  "stored Health access is rechecked when app becomes active"
+require_pattern app/index.tsx 'I TURNED IT OFF' \
+  "profile has a manual local disconnect recovery action"
 
-echo "---- 6) Auth persistence ----"
+echo "---- 7) Auth persistence ----"
 require_pattern app/index.tsx 'initializeAuth\(' \
   "initializeAuth usage present"
 require_pattern app/index.tsx 'getReactNativePersistence\(AsyncStorage\)' \
@@ -174,7 +202,7 @@ require_pattern package.json '"@react-native-async-storage/async-storage"' \
 require_pattern package.json '"postinstall": "node ./scripts/patch_rn_apple_healthkit_workout_permission\.js"' \
   "postinstall applies HealthKit workout permission patch"
 
-echo "---- 7) Installed dependency contract ----"
+echo "---- 8) Installed dependency contract ----"
 require_path node_modules/rn-apple-healthkit \
   "rn-apple-healthkit package directory exists"
 require_pattern node_modules/rn-apple-healthkit/Constants/Permissions.js 'Workout:\s*"Workout"' \
@@ -187,8 +215,10 @@ require_pattern node_modules/rn-apple-healthkit/RCTAppleHealthKit/RCTAppleHealth
   "installed rn-apple-healthkit has workout query handling"
 require_pattern node_modules/rn-apple-healthkit/RCTAppleHealthKit/RCTAppleHealthKit\+TypesAndPermissions\.m '\[@"Workout" isEqualToString:key\]|\[@"Workout" isEqualToString: key\]' \
   "installed rn-apple-healthkit has workout permission patch"
+require_pattern node_modules/rn-apple-healthkit/RCTAppleHealthKit/RCTAppleHealthKit\+Methods_Fitness\.m 'self\.healthStore = \[\[HKHealthStore alloc\] init\];' \
+  "installed rn-apple-healthkit initializes HealthStore before workout sample reads"
 
-echo "---- 8) Runbook / documented failure modes ----"
+echo "---- 9) Runbook / documented failure modes ----"
 require_pattern docs/ios-healthkit-go-live.md 'Known failure modes and fixes' \
   "runbook has failure-mode section"
 require_pattern docs/ios-healthkit-go-live.md 'Could not access Apple Health' \

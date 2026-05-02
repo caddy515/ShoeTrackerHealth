@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Keyboard, Platform, KeyboardAvoidingView, Dimensions } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, Modal, TextInput, Keyboard, Platform, KeyboardAvoidingView, Dimensions, AppState } from 'react-native';
 import { initializeApp } from 'firebase/app';
 import { getAuth, initializeAuth, getReactNativePersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential, sendPasswordResetEmail, deleteUser } from 'firebase/auth';
 import { getFirestore, collection, addDoc, getDocs, query, doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
@@ -36,6 +36,9 @@ const auth = (() => {
 })();
 const db = getFirestore(app);
 const storage = getStorage(app);
+const IPAD_HEALTH_SYNC_MESSAGE = 'Apple Health workout sync is available on iPhone. On iPad, log workouts manually from the main menu.';
+const HEALTH_RECONNECT_MESSAGE = 'Workout access is off in Apple Health. Reconnect Apple Health before syncing workouts again.';
+const isIpadDevice = () => Platform.OS === 'ios' && Platform.isPad === true;
 const resolveAppleHealthKit = () => {
   const candidates = [
     AppleHealthKitModule,
@@ -243,6 +246,8 @@ export default function App() {
   const headerMinHeight = Math.round(Dimensions.get('window').height * 0.17);
   const syncRequestIdRef = useRef(0);
   const autoSyncAttemptedRef = useRef('');
+  const healthAccessValidationRef = useRef('');
+  const validateStoredHealthAccessRef = useRef(null);
   const requestHealthKitPermissionRef = useRef(null);
   const syncWorkoutsRef = useRef(null);
   const [user, setUser] = useState(null);
@@ -628,6 +633,18 @@ export default function App() {
     return nextStats;
   };
 
+  const clearHealthLinkState = async (options = {}) => {
+    const { showAlert = false } = options;
+    setHealthAuthorized(false);
+    await persistGameStatsPatch({ healthLinked: false, autoSyncHealthOnOpen: false });
+    autoSyncAttemptedRef.current = '';
+    healthAccessValidationRef.current = '';
+
+    if (showAlert) {
+      Alert.alert('Apple Health disconnected', HEALTH_RECONNECT_MESSAGE);
+    }
+  };
+
   const queueCelebration = (payload) => {
     setCelebrationQueue((prev) => [...prev, payload]);
   };
@@ -909,6 +926,13 @@ export default function App() {
         return false;
       }
 
+      if (isIpadDevice()) {
+        if (!suppressErrorAlert) {
+          Alert.alert('Health sync on iPhone', IPAD_HEALTH_SYNC_MESSAGE);
+        }
+        return false;
+      }
+
       const healthKit = resolveAppleHealthKit();
       console.log('HealthKit module keys:', Object.keys(healthKit || {}), 'init:', typeof healthKit?.initHealthKit, 'workouts:', typeof healthKit?.getWorkouts, 'samples:', typeof healthKit?.getSamples);
 
@@ -936,6 +960,7 @@ export default function App() {
         healthKit.initHealthKit(permissions, async (err) => {
           if (err) {
             console.error('HealthKit init error:', err);
+            await clearHealthLinkState();
             if (!suppressErrorAlert) {
               Alert.alert('Error', 'Could not access Apple Health. Please enable in Settings.');
             }
@@ -1124,7 +1149,7 @@ export default function App() {
     const message = error?.message || String(error || '');
 
     if (message.includes('error getting samples')) {
-      return 'Apple Health did not return workout samples. Check Health app permissions for this app, confirm workouts exist in the selected date range, and try again.';
+      return 'No workout samples were returned. Check Health app permissions for this app, confirm workouts exist in the selected date range, and try again.';
     }
 
     if (message.includes('HealthKit workout APIs unavailable')) {
@@ -1132,6 +1157,48 @@ export default function App() {
     }
 
     return 'Could not fetch workouts from Apple Health.';
+  };
+
+  const isEmptyHealthKitWorkoutRead = (error) => {
+    const message = error?.message || String(error || '');
+    return message.includes('error getting samples');
+  };
+
+  const validateStoredHealthAccess = async (options = {}) => {
+    const { showAlert = false } = options;
+
+    if (Platform.OS !== 'ios' || isIpadDevice() || !user?.uid || !gameStats.healthLinked) {
+      return true;
+    }
+
+    const healthKit = resolveAppleHealthKit();
+    if (!healthKit || typeof healthKit.getSamples !== 'function') {
+      await clearHealthLinkState({ showAlert });
+      return false;
+    }
+
+    const now = new Date();
+    const rangeStartDate = new Date(now);
+    rangeStartDate.setFullYear(rangeStartDate.getFullYear() - 10);
+
+    try {
+      await callHealthKitCallbackMethodWithTimeout(healthKit, 'getSamples', {
+        startDate: rangeStartDate.toISOString(),
+        endDate: now.toISOString(),
+        ascending: false,
+        limit: 1,
+        type: 'Workout',
+        unit: 'mile',
+      }, 5000);
+      setHealthAuthorized(true);
+      return true;
+    } catch (error) {
+      console.warn('Stored HealthKit access validation failed:', error);
+      if (isEmptyHealthKitWorkoutRead(error)) {
+        await clearHealthLinkState({ showAlert });
+      }
+      return false;
+    }
   };
 
   const fetchWorkoutCandidatesWithTimeout = (healthKit, options, timeoutMs = 15000) =>
@@ -1145,6 +1212,11 @@ export default function App() {
   const syncWorkouts = async () => {
     if (Platform.OS !== 'ios') {
       Alert.alert('Unsupported', 'Apple Health sync is available on iOS only.');
+      return;
+    }
+
+    if (isIpadDevice()) {
+      Alert.alert('Health sync on iPhone', IPAD_HEALTH_SYNC_MESSAGE);
       return;
     }
 
@@ -1213,7 +1285,13 @@ export default function App() {
             hasGetSamples: typeof healthKit?.getSamples === 'function',
             options,
           });
-          Alert.alert('Apple Health sync failed', describeHealthKitReadError(err));
+          if (isEmptyHealthKitWorkoutRead(err)) {
+            await clearHealthLinkState();
+          }
+          Alert.alert(
+            isEmptyHealthKitWorkoutRead(err) ? 'No workouts found' : 'Apple Health sync failed',
+            isEmptyHealthKitWorkoutRead(err) ? HEALTH_RECONNECT_MESSAGE : describeHealthKitReadError(err)
+          );
           setBusyMessage('');
           return;
         }
@@ -1803,7 +1881,11 @@ export default function App() {
     if (isHealthLinked) {
       Alert.alert(
         'Manage Apple Health access',
-        'To remove access, open the Apple Health app, go to Sharing, tap Apps and Services, choose SHOE TRACKER 10000, and turn access off there.'
+        'To remove access, open the Apple Health app, go to Sharing, tap Apps and Services, choose SHOE TRACKER 10000, and turn access off there.',
+        [
+          { text: 'OK', style: 'cancel' },
+          { text: 'I TURNED IT OFF', style: 'destructive', onPress: () => clearHealthLinkState({ showAlert: true }) },
+        ]
       );
       return;
     }
@@ -1822,8 +1904,33 @@ export default function App() {
     Alert.alert('Saved', nextValue ? 'Automatic workout sync is now on when you open the app.' : 'Automatic workout sync is now off.');
   };
 
+  validateStoredHealthAccessRef.current = validateStoredHealthAccess;
   requestHealthKitPermissionRef.current = requestHealthKitPermission;
   syncWorkoutsRef.current = syncWorkouts;
+
+  useEffect(() => {
+    if (!user?.uid || loading || !gameStats.healthLinked) {
+      return;
+    }
+
+    const validationKey = `${user.uid}:${gameStats.healthLinked}`;
+    if (healthAccessValidationRef.current === validationKey) {
+      return;
+    }
+
+    healthAccessValidationRef.current = validationKey;
+    validateStoredHealthAccessRef.current?.();
+  }, [user, loading, gameStats.healthLinked]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' && user?.uid && gameStats.healthLinked) {
+        validateStoredHealthAccessRef.current?.();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [user, gameStats.healthLinked]);
 
   useEffect(() => {
     if (!user?.uid || loading) {
@@ -2115,31 +2222,38 @@ export default function App() {
 
               <View style={styles.section}>
                 <ExpoImage source={HEALTH_SYNC_IMAGE} style={styles.sectionTitleImage} contentFit="contain" />
-                <Text style={styles.syncRangeLabel}>Choose the duration for the workout sync</Text>
-                {gameStats.autoSyncHealthOnOpen ? (
-                  <Text style={styles.autoSyncNote}>AUTO SYNC ACTIVE, EDIT IN MY PROFILE</Text>
+                {isIpadDevice() ? (
+                  <Text style={styles.iPadHealthNote}>APPLE HEALTH WORKOUT SYNC IS AVAILABLE ON IPHONE. LOG WORKOUTS MANUALLY ON IPAD.</Text>
                 ) : null}
-                <View style={styles.syncRangeRow}>
-                  {[1, 7, 30, 90, 365].map((days) => (
-                    <TouchableOpacity key={days} style={[styles.syncRangeBtn, syncDays === days && styles.syncRangeBtnActive]} onPress={() => setSyncDays(days)}>
-                      <Text style={[styles.syncRangeBtnText, syncDays !== days && styles.syncRangeBtnTextInactive]}>{days === 365 ? '1Y' : `${days}D`}</Text>
+                {!isIpadDevice() ? (
+                  <>
+                    <Text style={styles.syncRangeLabel}>Choose the duration for the workout sync</Text>
+                    {gameStats.autoSyncHealthOnOpen ? (
+                      <Text style={styles.autoSyncNote}>AUTO SYNC ACTIVE, EDIT IN MY PROFILE</Text>
+                    ) : null}
+                    <View style={styles.syncRangeRow}>
+                      {[1, 7, 30, 90, 365].map((days) => (
+                        <TouchableOpacity key={days} style={[styles.syncRangeBtn, syncDays === days && styles.syncRangeBtnActive]} onPress={() => setSyncDays(days)}>
+                          <Text style={[styles.syncRangeBtnText, syncDays !== days && styles.syncRangeBtnTextInactive]}>{days === 365 ? '1Y' : `${days}D`}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    {!isHealthLinked ? (
+                      <TouchableOpacity
+                        style={styles.btnPrimary}
+                        onPress={requestHealthKitPermission}
+                      >
+                        <Text style={styles.btnPrimaryText}>AUTHORIZE HEALTH</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    <TouchableOpacity
+                      style={styles.btnPrimary}
+                      onPress={syncWorkouts}
+                    >
+                      <Text style={styles.btnPrimaryText}>SYNC WORKOUTS</Text>
                     </TouchableOpacity>
-                  ))}
-                </View>
-                {!isHealthLinked ? (
-                  <TouchableOpacity
-                    style={styles.btnPrimary}
-                    onPress={requestHealthKitPermission}
-                  >
-                    <Text style={styles.btnPrimaryText}>AUTHORIZE HEALTH</Text>
-                  </TouchableOpacity>
+                  </>
                 ) : null}
-                <TouchableOpacity
-                  style={styles.btnPrimary}
-                  onPress={syncWorkouts}
-                >
-                  <Text style={styles.btnPrimaryText}>SYNC WORKOUTS</Text>
-                </TouchableOpacity>
               </View>
 
               {logs.length > 0 && (
@@ -3024,6 +3138,7 @@ const styles = StyleSheet.create({
   btnDanger: { backgroundColor: '#5a0f0f', borderWidth: 2, borderColor: '#ff5a5a', padding: 12, marginBottom: 12, alignItems: 'center', shadowColor: '#ff5a5a', shadowOpacity: 0.2, shadowRadius: 3, shadowOffset: { width: 0, height: 0 }, elevation: 4 },
   btnDangerText: { color: '#ffd5d5', fontWeight: 'bold', fontSize: 12, fontFamily: ARCADE_FONT_FAMILY },
   syncRangeLabel: { color: '#ffff00', fontSize: 10, marginBottom: 10, fontFamily: ARCADE_FONT_FAMILY, lineHeight: 16 },
+  iPadHealthNote: { color: '#ffff00', fontSize: 10, marginBottom: 10, fontFamily: ARCADE_FONT_FAMILY, lineHeight: 16 },
   autoSyncNote: { color: '#00ff00', fontSize: 10, marginBottom: 10, fontFamily: ARCADE_FONT_FAMILY, lineHeight: 16 },
   syncRangeRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
   syncRangeBtn: { borderWidth: 1, borderColor: '#0ff', paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#111' },
