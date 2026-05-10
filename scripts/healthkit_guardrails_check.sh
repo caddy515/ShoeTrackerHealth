@@ -81,7 +81,7 @@ require_pattern app/index.tsx 'HealthKit unavailable' \
   "user-facing HealthKit unavailable alert exists"
 require_pattern app/index.tsx 'Install an EAS iOS build \(not Expo Go\)' \
   "Expo Go warning message exists"
-require_path assets/images/LOADING.png \
+require_path assets/images/loading-2.0.png \
   "bundled loading art asset exists"
 require_path scripts/patch_rn_apple_healthkit_workout_permission.js \
   "HealthKit workout permission patch script exists"

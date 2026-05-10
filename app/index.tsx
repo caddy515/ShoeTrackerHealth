@@ -88,7 +88,8 @@ const SHOES_READY_IMAGE = require('../assets/images/SHOESREADYTOPLAY.png');
 const RETIRED_SHOES_IMAGE = require('../assets/images/RETIREDSHOES.png');
 const HEALTH_SYNC_IMAGE = require('../assets/images/HEALTHSYNC.png');
 const ACTIVITY_LOG_IMAGE = require('../assets/images/ACTIVITYLOG.png');
-const LOADING_IMAGE = require('../assets/images/LOADING.png');
+const STARTUP_IMAGE = require('../assets/images/app-icon-2.0.png');
+const LOADING_IMAGE = require('../assets/images/loading-2.0.png');
 const LOGIN_APP_IMAGE = require('../assets/images/APPIMAGE2.png');
 const ARCADE_FONT_FAMILY = 'PressStart2P';
 const CELEBRATION_IMAGE = require('../assets/images/APPIMAGE2.png');
@@ -1297,7 +1298,10 @@ export default function App() {
         }
 
         if (!results || results.length === 0) {
-          Alert.alert('No workouts found', `No workouts found in Apple Health for the last ${syncDays} days.`);
+          setPendingImportWorkouts([]);
+          setSelectedImportIds([]);
+          setPreviewAssignedShoes({});
+          setCurrentPage('syncPreview');
           setBusyMessage('');
           return;
         }
@@ -1881,7 +1885,7 @@ export default function App() {
     if (isHealthLinked) {
       Alert.alert(
         'Manage Apple Health access',
-        'To remove access, open the Apple Health app, go to Sharing, tap Apps and Services, choose SHOE TRACKER 10000, and turn access off there.',
+        'To remove access, open the Apple Health app, go to Sharing, tap Apps and Services, choose Shoe Tracker 10000, and turn access off there.',
         [
           { text: 'OK', style: 'cancel' },
           { text: 'I TURNED IT OFF', style: 'destructive', onPress: () => clearHealthLinkState({ showAlert: true }) },
@@ -1962,7 +1966,7 @@ export default function App() {
     return (
       <View style={styles.container}>
         <View style={styles.busyOverlayStatic}>
-          <ExpoImage source={LOADING_IMAGE} style={styles.loadingArtFullScreen} contentFit="contain" />
+          <ExpoImage source={STARTUP_IMAGE} style={styles.startupIcon} contentFit="contain" />
         </View>
       </View>
     );
@@ -2625,6 +2629,20 @@ export default function App() {
     const allSelectablePreviewIds = previewDisplayCandidates.map((candidate) => candidate.previewId);
     const allPreviewSelected = allSelectablePreviewIds.length > 0 && allSelectablePreviewIds.every((id) => selectedImportIds.includes(id));
 
+    if (previewDisplayCandidates.length === 0) {
+      return (
+        <View style={styles.container}>
+          <View style={styles.emptyImportState}>
+            <Text style={styles.emptyImportTitle}>Nothing new to import</Text>
+            <TouchableOpacity style={styles.submitBtn} onPress={clearImportPreview}>
+              <Text style={styles.submitBtnText}>GO BACK TO MAIN MENU</Text>
+            </TouchableOpacity>
+          </View>
+          {renderBusyOverlay()}
+        </View>
+      );
+    }
+
     return (
       <View style={styles.container}>
         <View style={[styles.header, styles.stackedHeader, { minHeight: headerMinHeight, paddingTop: Math.max(14, insets.top + 8) }]}>
@@ -2640,80 +2658,69 @@ export default function App() {
         <ScrollView style={styles.content}>
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>REVIEW BEFORE IMPORT</Text>
-            {previewDisplayCandidates.length === 0 ? (
-              <>
-                <Text style={styles.emptyText}>NOTHING NEW TO IMPORT</Text>
-                <TouchableOpacity style={styles.submitBtn} onPress={clearImportPreview}>
-                  <Text style={styles.submitBtnText}>GO BACK TO MAIN MENU</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <TouchableOpacity style={styles.btnSecondary} onPress={selectAllEligibleImports}>
-                  <Text style={styles.btnSecondaryText}>{allPreviewSelected ? 'UNSELECT ALL' : 'SELECT ALL'}</Text>
-                </TouchableOpacity>
-                {previewDisplayCandidates.map((candidate) => {
-                  const isSelected = selectedImportIds.includes(candidate.previewId);
-                  const isSelectable = candidate.status === 'ready' || candidate.status === 'deleted';
-                  const assignedShoeId = previewAssignedShoes[candidate.previewId];
-                  const assignedShoe = activeShoes.find((shoe) => shoe.id === assignedShoeId) || null;
-                  const statusLabel =
-                    candidate.status === 'deleted'
-                        ? 'PREVIOUSLY DELETED'
-                        : 'READY';
+            <TouchableOpacity style={styles.btnSecondary} onPress={selectAllEligibleImports}>
+              <Text style={styles.btnSecondaryText}>{allPreviewSelected ? 'UNSELECT ALL' : 'SELECT ALL'}</Text>
+            </TouchableOpacity>
+            {previewDisplayCandidates.map((candidate) => {
+              const isSelected = selectedImportIds.includes(candidate.previewId);
+              const isSelectable = candidate.status === 'ready' || candidate.status === 'deleted';
+              const assignedShoeId = previewAssignedShoes[candidate.previewId];
+              const assignedShoe = activeShoes.find((shoe) => shoe.id === assignedShoeId) || null;
+              const statusLabel =
+                candidate.status === 'deleted'
+                    ? 'PREVIOUSLY DELETED'
+                    : 'READY';
 
-                  return (
+              return (
+                <TouchableOpacity
+                  key={candidate.previewId}
+                  style={[
+                    styles.importPreviewCard,
+                    isSelected && styles.importPreviewCardSelected,
+                  ]}
+                  onPress={() => (isSelectable ? toggleImportSelection(candidate.previewId) : null)}
+                >
+                  <View style={styles.importPreviewMainCol}>
+                    <Text style={styles.workoutMileage}>{candidate.distance} MI</Text>
+                    <Text style={styles.workoutDate}>{candidate.date} • {candidate.type}</Text>
+                    <Text style={styles.workoutDate}>SOURCE: {candidate.sourceLabel}</Text>
+                    <Text style={styles.workoutAssignment}>{statusLabel}</Text>
+                    <Text style={styles.pickShoeText}>ASSIGN TO ACTIVE SHOE</Text>
+                    {assignedShoe ? (
+                      <Text style={styles.selectedShoeSummary}>SELECTED SHOE: {assignedShoe.name}</Text>
+                    ) : (
+                      <Text style={styles.selectedShoeSummaryMuted}>NO SHOE SELECTED YET</Text>
+                    )}
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.previewShoePickerRow}>
+                      {activeShoes.map((shoe) => {
+                        const selected = assignedShoeId === shoe.id;
+                        return (
+                          <TouchableOpacity
+                            key={`${candidate.previewId}-${shoe.id}`}
+                            style={[styles.previewShoeChip, selected ? styles.previewShoeChipActive : styles.previewShoeChipInactive]}
+                            onPress={() => setPreviewAssignedShoes((prev) => ({ ...prev, [candidate.previewId]: shoe.id }))}
+                          >
+                            <Text style={styles.previewShoeChipText}>{shoe.name}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
                     <TouchableOpacity
-                      key={candidate.previewId}
-                      style={[
-                        styles.importPreviewCard,
-                        isSelected && styles.importPreviewCardSelected,
-                      ]}
+                      style={[styles.importPreviewSelectBtn, isSelected && styles.importPreviewSelectBtnActive]}
                       onPress={() => (isSelectable ? toggleImportSelection(candidate.previewId) : null)}
                     >
-                      <View style={styles.importPreviewMainCol}>
-                        <Text style={styles.workoutMileage}>{candidate.distance} MI</Text>
-                        <Text style={styles.workoutDate}>{candidate.date} • {candidate.type}</Text>
-                        <Text style={styles.workoutDate}>SOURCE: {candidate.sourceLabel}</Text>
-                        <Text style={styles.workoutAssignment}>{statusLabel}</Text>
-                        <Text style={styles.pickShoeText}>ASSIGN TO ACTIVE SHOE</Text>
-                        {assignedShoe ? (
-                          <Text style={styles.selectedShoeSummary}>SELECTED SHOE: {assignedShoe.name}</Text>
-                        ) : (
-                          <Text style={styles.selectedShoeSummaryMuted}>NO SHOE SELECTED YET</Text>
-                        )}
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.previewShoePickerRow}>
-                          {activeShoes.map((shoe) => {
-                            const selected = assignedShoeId === shoe.id;
-                            return (
-                              <TouchableOpacity
-                                key={`${candidate.previewId}-${shoe.id}`}
-                                style={[styles.previewShoeChip, selected ? styles.previewShoeChipActive : styles.previewShoeChipInactive]}
-                                onPress={() => setPreviewAssignedShoes((prev) => ({ ...prev, [candidate.previewId]: shoe.id }))}
-                              >
-                                <Text style={styles.previewShoeChipText}>{shoe.name}</Text>
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </ScrollView>
-                        <TouchableOpacity
-                          style={[styles.importPreviewSelectBtn, isSelected && styles.importPreviewSelectBtnActive]}
-                          onPress={() => (isSelectable ? toggleImportSelection(candidate.previewId) : null)}
-                        >
-                          <Text style={styles.importSelectLabel}>{isSelected ? 'SELECTED' : candidate.status === 'deleted' ? 'RESTORE' : 'SELECT'}</Text>
-                        </TouchableOpacity>
-                      </View>
+                      <Text style={styles.importSelectLabel}>{isSelected ? 'SELECTED' : candidate.status === 'deleted' ? 'RESTORE' : 'SELECT'}</Text>
                     </TouchableOpacity>
-                  );
-                })}
-                <TouchableOpacity style={styles.submitBtn} onPress={importSelectedWorkouts}>
-                  <Text style={styles.submitBtnText}>IMPORT SELECTED</Text>
+                  </View>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.submitBtn} onPress={clearImportPreview}>
-                  <Text style={styles.submitBtnText}>GO BACK TO MAIN MENU</Text>
-                </TouchableOpacity>
-              </>
-            )}
+              );
+            })}
+            <TouchableOpacity style={styles.submitBtn} onPress={importSelectedWorkouts}>
+              <Text style={styles.submitBtnText}>IMPORT SELECTED</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.submitBtn} onPress={clearImportPreview}>
+              <Text style={styles.submitBtnText}>GO BACK TO MAIN MENU</Text>
+            </TouchableOpacity>
           </View>
         </ScrollView>
         {renderBusyOverlay()}
@@ -3174,10 +3181,13 @@ const styles = StyleSheet.create({
   calendarDayText: { color: '#0ff', fontSize: 10, fontFamily: ARCADE_FONT_FAMILY },
   calendarDayTextActive: { color: '#000' },
   busyOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', zIndex: 2000 },
-  busyOverlayStatic: { flex: 1, backgroundColor: '#000' },
+  busyOverlayStatic: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
   busyCard: { backgroundColor: '#111827', borderWidth: 3, borderColor: '#ffff00', padding: 20, width: '78%', alignItems: 'center' },
   loadingArt: { width: 220, height: 220, marginBottom: 12 },
   loadingArtFullScreen: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%', alignSelf: 'center' },
+  startupIcon: { width: 250, height: 250 },
+  emptyImportState: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+  emptyImportTitle: { color: '#ffff00', fontSize: 24, fontFamily: ARCADE_FONT_FAMILY, textAlign: 'center', lineHeight: 36, marginBottom: 28 },
   stackedHeader: { flexDirection: 'column', alignItems: 'stretch', justifyContent: 'center', gap: 8 },
   stackedHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   previewShoePickerRow: { gap: 8, paddingTop: 6, paddingBottom: 2, minWidth: '100%' },

@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "SHOE TRACKER 10000",
+    "name": "Shoe Tracker 10000",
     "slug": "ShoeTrackerHealth",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/APPIMAGE2.png",
+    "icon": "./assets/images/app-icon-2.0.png",
     "scheme": "shoetrackerhealth",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": false,
@@ -15,6 +15,7 @@
         "com.apple.developer.healthkit": true
       },
       "infoPlist": {
+        "CFBundleDisplayName": "Shoe Tracker 10000",
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Shoe Tracker 10000 uses the camera only when you choose to take a photo of a running shoe, for example to show that shoe on its detail card and mileage tracker.",
         "NSHealthShareUsageDescription": "We need access to your health data to track running workouts",
@@ -42,8 +43,8 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
+          "image": "./assets/images/app-icon-2.0.png",
+          "imageWidth": 220,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",
           "dark": {
