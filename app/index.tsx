@@ -38,6 +38,9 @@ const db = getFirestore(app);
 const storage = getStorage(app);
 const IPAD_HEALTH_SYNC_MESSAGE = 'Apple Health workout sync is available on iPhone. On iPad, log workouts manually from the main menu.';
 const HEALTH_RECONNECT_MESSAGE = 'Workout access is off in Apple Health. Reconnect Apple Health before syncing workouts again.';
+const LAST_USER_CACHE_KEY = 'shoe-tracker:last-user';
+const userCacheKey = (userId) => `shoe-tracker:user-cache:${userId}`;
+const PHOTO_UPLOAD_ERROR_MESSAGE = 'Photo upload failed. Connect to the internet and try again, or remove the photo before saving.';
 const isIpadDevice = () => Platform.OS === 'ios' && Platform.isPad === true;
 const resolveAppleHealthKit = () => {
   const candidates = [
@@ -60,9 +63,15 @@ const resolveAppleHealthKit = () => {
 const ACHIEVEMENTS = {
   firstStep: { id: 'firstStep', name: 'FIRST STEP', icon: '👟', description: 'Log your first run', coins: 10 },
   halfMiler: { id: 'halfMiler', name: 'HALF MARATHON', icon: '🏅', description: '13.1 total miles', coins: 100 },
+  fullMarathon: { id: 'fullMarathon', name: 'FULL MARATHON', icon: '🏁', description: '26.2 total miles', coins: 150 },
   weekWarrior: { id: 'weekWarrior', name: 'WEEK WARRIOR', icon: '⚡', description: '3 runs in 1 week', coins: 75 },
+  weekWarrior5: { id: 'weekWarrior5', name: 'WEEK WARRIOR 5', icon: '🔥', description: '5 runs in 1 week', coins: 125 },
+  weekWarrior7: { id: 'weekWarrior7', name: 'WEEK WARRIOR 7', icon: '💪', description: '7 runs in 1 week', coins: 200 },
   collector: { id: 'collector', name: 'COLLECTOR', icon: '👟👟👟', description: '3+ shoes', coins: 60 },
   consistentFire: { id: 'consistentFire', name: 'CONSISTENT FIRE', icon: '🔥', description: '4 weeks logging', coins: 200 },
+  miles100: { id: 'miles100', name: '100 MILES', icon: '💯', description: '100 total miles', coins: 200 },
+  miles500: { id: 'miles500', name: '500 MILES', icon: '🏆', description: '500 total miles', coins: 500 },
+  miles1000: { id: 'miles1000', name: '1000 MILES', icon: '🚀', description: '1000 total miles', coins: 1000 },
   linked: { id: 'linked', name: 'LINKED', icon: '🔗', description: 'Connected Apple Health', coins: 150 },
 };
 
@@ -248,6 +257,9 @@ export default function App() {
   const syncRequestIdRef = useRef(0);
   const autoSyncAttemptedRef = useRef('');
   const healthAccessValidationRef = useRef('');
+  const authResolvedRef = useRef(false);
+  const gameStatsRef = useRef({ coins: 0, achievements: [] });
+  const logoutRequestedRef = useRef(false);
   const validateStoredHealthAccessRef = useRef(null);
   const requestHealthKitPermissionRef = useRef(null);
   const syncWorkoutsRef = useRef(null);
@@ -272,6 +284,8 @@ export default function App() {
   const [pendingImportWorkouts, setPendingImportWorkouts] = useState([]);
   const [selectedImportIds, setSelectedImportIds] = useState([]);
   const [previewAssignedShoes, setPreviewAssignedShoes] = useState({});
+  const [importPreviewMode, setImportPreviewMode] = useState('manual');
+  const [photoLoadFailures, setPhotoLoadFailures] = useState({});
   const [syncDays, setSyncDays] = useState(30);
   const [healthAuthorized, setHealthAuthorized] = useState(false);
   const [unlockedAchievement, setUnlockedAchievement] = useState(null);
@@ -285,9 +299,115 @@ export default function App() {
   const [datePickerState, setDatePickerState] = useState({ visible: false, target: null, monthCursor: new Date() });
 
   useEffect(() => {
+    gameStatsRef.current = gameStats;
+  }, [gameStats]);
+
+  const readCachedUserData = async (userId) => {
+    try {
+      const raw = await AsyncStorage.getItem(userCacheKey(userId));
+      return raw ? JSON.parse(raw) : null;
+    } catch (error) {
+      console.warn('Read cached user data failed:', error);
+      return null;
+    }
+  };
+
+  const writeCachedUserData = async (userId, patch) => {
+    if (!userId) return;
+
+    try {
+      const existing = await readCachedUserData(userId);
+      await AsyncStorage.setItem(
+        userCacheKey(userId),
+        JSON.stringify({
+          ...(existing || {}),
+          ...patch,
+          cachedAt: new Date().toISOString(),
+        })
+      );
+    } catch (error) {
+      console.warn('Write cached user data failed:', error);
+    }
+  };
+
+  const loadCachedUserData = async (userId) => {
+    const cached = await readCachedUserData(userId);
+    if (!cached) return false;
+
+    if (Array.isArray(cached.shoes)) {
+      setShoes(cached.shoes);
+    }
+    if (Array.isArray(cached.logs)) {
+      setLogs(cached.logs);
+    }
+    if (Array.isArray(cached.healthWorkouts)) {
+      setHealthWorkouts(cached.healthWorkouts);
+    }
+    if (cached.gameStats) {
+      const normalizedStats = {
+        coins: 0,
+        achievements: [],
+        healthLinked: false,
+        autoSyncHealthOnOpen: false,
+        autoSyncSkippedWorkoutIds: [],
+        ...cached.gameStats,
+      };
+      setGameStats(normalizedStats);
+      setHealthAuthorized(Boolean(normalizedStats.healthLinked));
+    }
+
+    return true;
+  };
+
+  const rememberLastUser = async (currentUser) => {
+    if (!currentUser?.uid) return;
+
+    try {
+      await AsyncStorage.setItem(
+        LAST_USER_CACHE_KEY,
+        JSON.stringify({
+          uid: currentUser.uid,
+          email: currentUser.email || '',
+        })
+      );
+    } catch (error) {
+      console.warn('Remember last user failed:', error);
+    }
+  };
+
+  const hydrateOfflineUserFromCache = async () => {
+    try {
+      const raw = await AsyncStorage.getItem(LAST_USER_CACHE_KEY);
+      const cachedUser = raw ? JSON.parse(raw) : null;
+      if (!cachedUser?.uid) {
+        return false;
+      }
+
+      setUser(cachedUser);
+      await loadCachedUserData(cachedUser.uid);
+      setCurrentPage('dashboard');
+      setLoading(false);
+      return true;
+    } catch (error) {
+      console.warn('Offline startup cache restore failed:', error);
+      return false;
+    }
+  };
+
+  useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      authResolvedRef.current = true;
+      if (!currentUser && !logoutRequestedRef.current) {
+        const restored = await hydrateOfflineUserFromCache();
+        if (restored) {
+          return;
+        }
+      }
       setUser(currentUser);
       if (currentUser) {
+        logoutRequestedRef.current = false;
+        await rememberLastUser(currentUser);
+        await loadCachedUserData(currentUser.uid);
         loadShoes(currentUser.uid);
         loadLogs(currentUser.uid);
         loadGameStats(currentUser.uid);
@@ -296,24 +416,62 @@ export default function App() {
       }
       setLoading(false);
     });
-    return unsubscribe;
+
+    const startupTimer = setTimeout(async () => {
+      if (authResolvedRef.current) {
+        return;
+      }
+
+      const currentUser = auth.currentUser;
+      if (currentUser?.uid) {
+        authResolvedRef.current = true;
+        setUser(currentUser);
+        await rememberLastUser(currentUser);
+        await loadCachedUserData(currentUser.uid);
+        setCurrentPage('dashboard');
+        setLoading(false);
+        loadShoes(currentUser.uid);
+        loadLogs(currentUser.uid);
+        loadGameStats(currentUser.uid);
+        loadHealthWorkouts(currentUser.uid);
+        return;
+      }
+
+      const restored = await hydrateOfflineUserFromCache();
+      if (!restored) {
+        setLoading(false);
+      }
+    }, 3500);
+
+    return () => {
+      clearTimeout(startupTimer);
+      unsubscribe();
+    };
+  // Startup hydration must run once; the helpers it calls are declared in component scope.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadShoes = async (userId) => {
     try {
       const snapshot = await getDocs(query(collection(db, 'users', userId, 'shoes')));
-      setShoes(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+      const nextShoes = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+      setShoes(nextShoes);
+      await writeCachedUserData(userId, { shoes: nextShoes });
     } catch (error) {
       console.error('Load shoes error:', error);
+      await loadCachedUserData(userId);
     }
   };
 
   const loadLogs = async (userId) => {
     try {
       const snapshot = await getDocs(query(collection(db, 'users', userId, 'logs')));
-      setLogs(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, mileage: parseFloat(doc.data().mileage) })));
+      const nextLogs = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, mileage: parseFloat(doc.data().mileage) }));
+      setLogs(nextLogs);
+      await writeCachedUserData(userId, { logs: nextLogs });
     } catch (error) {
       console.error('Load logs error:', error);
+      await loadCachedUserData(userId);
     }
   };
 
@@ -331,8 +489,10 @@ export default function App() {
           return String(b.date || '').localeCompare(String(a.date || ''));
         });
       setHealthWorkouts(workouts);
+      await writeCachedUserData(userId, { healthWorkouts: workouts });
     } catch (error) {
       console.error('Load health workouts error:', error);
+      await loadCachedUserData(userId);
     }
   };
 
@@ -372,6 +532,31 @@ export default function App() {
     logs
       .filter((log) => log.shoeId === shoeId)
       .reduce((longest, log) => Math.max(longest, Number(log.mileage || 0)), 0);
+
+  const markPhotoLoadFailed = (photoKey, photoUrl) => {
+    if (!photoKey || !photoUrl) return;
+    setPhotoLoadFailures((prev) => ({ ...prev, [photoKey]: photoUrl }));
+  };
+
+  const renderShoePhoto = (photoUrl, style, photoKey, placeholderText = 'NO PHOTO') => {
+    const failed = photoUrl && photoLoadFailures[photoKey] === photoUrl;
+    if (photoUrl && !failed) {
+      return (
+        <ExpoImage
+          source={{ uri: photoUrl }}
+          style={style}
+          contentFit="cover"
+          onError={() => markPhotoLoadFailed(photoKey, photoUrl)}
+        />
+      );
+    }
+
+    return (
+      <View style={[styles.shoeHeroPlaceholder, style]}>
+        <Text style={styles.shoeHeroPlaceholderText}>{photoUrl ? 'PHOTO UNAVAILABLE' : placeholderText}</Text>
+      </View>
+    );
+  };
 
   const getShoeAgeDetails = (purchaseDate) => {
     const date = parsePurchaseDate(purchaseDate);
@@ -545,10 +730,38 @@ export default function App() {
     setSelectedImportIds(allSelected ? [] : eligibleIds);
   };
 
-  const clearImportPreview = () => {
+  const getReviewableImportCandidates = (candidates) =>
+    candidates.filter((candidate) => (candidate.status === 'ready' || candidate.status === 'deleted') && candidate.sourceWorkoutId);
+
+  const markAutoSyncWorkoutsReviewed = async (candidates = pendingImportWorkouts, importedPreviewIds = []) => {
+    if (importPreviewMode !== 'auto') {
+      return;
+    }
+
+    const importedIds = new Set(importedPreviewIds);
+    const reviewedSourceIds = getReviewableImportCandidates(candidates)
+      .filter((candidate) => !importedIds.has(candidate.previewId))
+      .map((candidate) => candidate.sourceWorkoutId);
+
+    if (reviewedSourceIds.length === 0) {
+      return;
+    }
+
+    const currentSkipped = Array.isArray(gameStatsRef.current.autoSyncSkippedWorkoutIds)
+      ? gameStatsRef.current.autoSyncSkippedWorkoutIds
+      : [];
+    const nextSkipped = Array.from(new Set([...currentSkipped, ...reviewedSourceIds]));
+    await persistGameStatsPatch({ autoSyncSkippedWorkoutIds: nextSkipped });
+  };
+
+  const clearImportPreview = async (options = {}) => {
+    if (!options.skipReviewMark) {
+      await markAutoSyncWorkoutsReviewed();
+    }
     setPendingImportWorkouts([]);
     setSelectedImportIds([]);
     setPreviewAssignedShoes({});
+    setImportPreviewMode('manual');
     setCurrentPage('dashboard');
   };
 
@@ -610,26 +823,35 @@ export default function App() {
           achievements: [],
           healthLinked: false,
           autoSyncHealthOnOpen: false,
+          autoSyncSkippedWorkoutIds: [],
           ...data,
         };
         setGameStats(normalizedStats);
         setHealthAuthorized(Boolean(normalizedStats.healthLinked));
+        await writeCachedUserData(userId, { gameStats: normalizedStats });
       } else {
-        setGameStats({ coins: 0, achievements: [], healthLinked: false, autoSyncHealthOnOpen: false });
+        const defaultStats = { coins: 0, achievements: [], healthLinked: false, autoSyncHealthOnOpen: false, autoSyncSkippedWorkoutIds: [] };
+        setGameStats(defaultStats);
         setHealthAuthorized(false);
+        await writeCachedUserData(userId, { gameStats: defaultStats });
       }
     } catch (error) {
       console.error('Load stats error:', error);
-      setGameStats({ coins: 0, achievements: [], healthLinked: false, autoSyncHealthOnOpen: false });
-      setHealthAuthorized(false);
+      await loadCachedUserData(userId);
     }
   };
 
   const persistGameStatsPatch = async (patch) => {
-    const nextStats = { ...gameStats, ...patch };
+    const nextStats = { ...gameStatsRef.current, ...patch };
     setGameStats(nextStats);
+    gameStatsRef.current = nextStats;
     if (user?.uid) {
-      await setDoc(doc(db, 'users', user.uid, 'gameStats', 'data'), nextStats, { merge: true });
+      await writeCachedUserData(user.uid, { gameStats: nextStats });
+      try {
+        await setDoc(doc(db, 'users', user.uid, 'gameStats', 'data'), nextStats, { merge: true });
+      } catch (error) {
+        console.warn('Game stats sync failed; saved locally:', error);
+      }
     }
     return nextStats;
   };
@@ -695,6 +917,12 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
+      logoutRequestedRef.current = true;
+      const signedOutUserId = user?.uid || auth.currentUser?.uid;
+      await AsyncStorage.removeItem(LAST_USER_CACHE_KEY);
+      if (signedOutUserId) {
+        await AsyncStorage.removeItem(userCacheKey(signedOutUserId));
+      }
       await signOut(auth);
       setShoes([]);
       setLogs([]);
@@ -786,50 +1014,70 @@ export default function App() {
     }
   };
 
-  const uploadShoePhotoIfNeeded = async (uri) => {
-    if (!uri) return '';
-    if (!uri.startsWith('file://') && !uri.startsWith('ph://')) return uri;
+  const isLocalShoePhotoUri = (uri) => String(uri || '').startsWith('file://') || String(uri || '').startsWith('ph://');
 
-    const persistPhotoLocally = async () => {
-      try {
-        const documentDirectory = FileSystem.documentDirectory;
-        if (!documentDirectory) {
-          return uri;
-        }
-
-        const targetDirectory = `${documentDirectory}shoe-photos/`;
-        const fileExtension = uri.match(/\.(png|jpg|jpeg|webp|gif)$/i)?.[1] || 'jpg';
-        const destination = `${targetDirectory}${user.uid}-${Date.now()}.${fileExtension}`;
-        const directoryInfo = await FileSystem.getInfoAsync(targetDirectory);
-
-        if (!directoryInfo.exists) {
-          await FileSystem.makeDirectoryAsync(targetDirectory, { intermediates: true });
-        }
-
-        if (uri.startsWith('ph://')) {
-          const copied = await FileSystem.copyAsync({ from: uri, to: destination }).then(() => destination).catch(() => null);
-          if (copied) {
-            return copied;
-          }
-        }
-
-        await FileSystem.copyAsync({ from: uri, to: destination });
-        return destination;
-      } catch (localError) {
-        console.warn('Local photo persistence failed, keeping original URI:', localError);
-        return uri;
-      }
+  const getShoePhotoFileDetails = (uri) => {
+    const fileExtension = String(uri || '').match(/\.(png|jpg|jpeg|webp|gif)$/i)?.[1]?.toLowerCase() || 'jpg';
+    const normalizedExtension = fileExtension === 'jpeg' ? 'jpg' : fileExtension;
+    const contentTypeByExtension = {
+      png: 'image/png',
+      jpg: 'image/jpeg',
+      webp: 'image/webp',
+      gif: 'image/gif',
     };
 
+    return {
+      fileExtension: normalizedExtension,
+      contentType: contentTypeByExtension[normalizedExtension] || 'image/jpeg',
+    };
+  };
+
+  const prepareShoePhotoForSave = async ({ uri, shoeId, existingStoragePath = '', clearMissingLocalPhoto = false }) => {
+    const photoUri = String(uri || '').trim();
+    if (!photoUri) {
+      return { photoUrl: '', photoStoragePath: '', photoUpdatedAt: null };
+    }
+
+    if (!isLocalShoePhotoUri(photoUri)) {
+      return { photoUrl: photoUri, photoStoragePath: existingStoragePath || '', photoUpdatedAt: null };
+    }
+
+    if (!user?.uid || !shoeId) {
+      throw new Error('Sign in again before saving a shoe photo.');
+    }
+
+    if (photoUri.startsWith('file://')) {
+      const localFile = await FileSystem.getInfoAsync(photoUri);
+      if (!localFile.exists) {
+        if (clearMissingLocalPhoto) {
+          return { photoUrl: '', photoStoragePath: '', photoUpdatedAt: new Date().toISOString() };
+        }
+
+        throw new Error('The selected shoe photo is no longer available. Choose the photo again before saving.');
+      }
+    }
+
     try {
-      const response = await fetch(uri);
+      const response = await fetch(photoUri);
+      if (!response.ok) {
+        throw new Error(`Could not read selected photo: ${response.status}`);
+      }
+
       const blob = await response.blob();
-      const storageRef = ref(storage, `users/${user.uid}/shoe-photos/${Date.now()}.jpg`);
-      await uploadBytes(storageRef, blob);
-      return await getDownloadURL(storageRef);
+      const { fileExtension, contentType } = getShoePhotoFileDetails(photoUri);
+      const photoStoragePath = `users/${user.uid}/shoe-photos/${shoeId}-${Date.now()}.${fileExtension}`;
+      const storageRef = ref(storage, photoStoragePath);
+      await uploadBytes(storageRef, blob, { contentType });
+      const photoUrl = await getDownloadURL(storageRef);
+
+      return {
+        photoUrl,
+        photoStoragePath,
+        photoUpdatedAt: new Date().toISOString(),
+      };
     } catch (error) {
-      console.warn('Photo upload failed, persisting local photo instead:', error);
-      return await persistPhotoLocally();
+      console.warn('Photo upload failed:', error);
+      throw new Error(PHOTO_UPLOAD_ERROR_MESSAGE);
     }
   };
 
@@ -900,8 +1148,11 @@ export default function App() {
               }
             }
 
-            setShoes((prev) => prev.filter((shoe) => shoe.id !== shoeId));
-            setLogs((prev) => prev.filter((log) => log.shoeId !== shoeId));
+            const updatedShoes = shoes.filter((shoe) => shoe.id !== shoeId);
+            const updatedLogs = logs.filter((log) => log.shoeId !== shoeId);
+            setShoes(updatedShoes);
+            setLogs(updatedLogs);
+            await writeCachedUserData(user.uid, { shoes: updatedShoes, logs: updatedLogs });
             await loadHealthWorkouts(user.uid);
             await loadShoes(user.uid);
             await loadLogs(user.uid);
@@ -1210,27 +1461,37 @@ export default function App() {
       }),
     ]);
 
-  const syncWorkouts = async () => {
+  const syncWorkouts = async (syncOptions = {}) => {
+    const isAutoSync = syncOptions.auto === true;
+
     if (Platform.OS !== 'ios') {
-      Alert.alert('Unsupported', 'Apple Health sync is available on iOS only.');
+      if (!isAutoSync) {
+        Alert.alert('Unsupported', 'Apple Health sync is available on iOS only.');
+      }
       return;
     }
 
     if (isIpadDevice()) {
-      Alert.alert('Health sync on iPhone', IPAD_HEALTH_SYNC_MESSAGE);
+      if (!isAutoSync) {
+        Alert.alert('Health sync on iPhone', IPAD_HEALTH_SYNC_MESSAGE);
+      }
       return;
     }
 
     if (!healthAuthorized) {
       const granted = await requestHealthKitPermission({ silentSuccess: true, suppressErrorAlert: true });
       if (!granted) {
-        Alert.alert('Error', 'Please authorize Apple Health first.');
+        if (!isAutoSync) {
+          Alert.alert('Error', 'Please authorize Apple Health first.');
+        }
         return;
       }
     }
 
     if (!user?.uid) {
-      Alert.alert('Error', 'Please log in again and retry sync.');
+      if (!isAutoSync) {
+        Alert.alert('Error', 'Please log in again and retry sync.');
+      }
       return;
     }
 
@@ -1253,6 +1514,7 @@ export default function App() {
 
       console.log('[HealthSync] sync requested', {
         syncDays,
+        isAutoSync,
         startDate: options.startDate,
         endDate: options.endDate,
       });
@@ -1260,7 +1522,9 @@ export default function App() {
       const healthKit = resolveAppleHealthKit();
 
       if (!healthKit || typeof healthKit.getSamples !== 'function') {
-        Alert.alert('HealthKit unavailable', 'This build does not include Apple Health workout APIs.');
+        if (!isAutoSync) {
+          Alert.alert('HealthKit unavailable', 'This build does not include Apple Health workout APIs.');
+        }
         return;
       }
 
@@ -1289,10 +1553,12 @@ export default function App() {
           if (isEmptyHealthKitWorkoutRead(err)) {
             await clearHealthLinkState();
           }
-          Alert.alert(
-            isEmptyHealthKitWorkoutRead(err) ? 'No workouts found' : 'Apple Health sync failed',
-            isEmptyHealthKitWorkoutRead(err) ? HEALTH_RECONNECT_MESSAGE : describeHealthKitReadError(err)
-          );
+          if (!isAutoSync) {
+            Alert.alert(
+              isEmptyHealthKitWorkoutRead(err) ? 'No workouts found' : 'Apple Health sync failed',
+              isEmptyHealthKitWorkoutRead(err) ? HEALTH_RECONNECT_MESSAGE : describeHealthKitReadError(err)
+            );
+          }
           setBusyMessage('');
           return;
         }
@@ -1349,13 +1615,26 @@ export default function App() {
           };
         });
 
+        const skippedAutoSyncIds = new Set(
+          Array.isArray(gameStatsRef.current.autoSyncSkippedWorkoutIds)
+            ? gameStatsRef.current.autoSyncSkippedWorkoutIds
+            : []
+        );
+        const visiblePreviewCandidates = isAutoSync
+          ? previewCandidates.filter(
+            (candidate) =>
+              !(candidate.sourceWorkoutId && skippedAutoSyncIds.has(candidate.sourceWorkoutId) && (candidate.status === 'ready' || candidate.status === 'deleted'))
+          )
+          : previewCandidates;
+
         console.log('[HealthSync] preview candidates built', {
-          candidateCount: previewCandidates.length,
-          readyCount: previewCandidates.filter((candidate) => candidate.status === 'ready').length,
-          updateCount: previewCandidates.filter((candidate) => candidate.status === 'update').length,
-          invalidCount: previewCandidates.filter((candidate) => candidate.status === 'invalid').length,
-          deletedCount: previewCandidates.filter((candidate) => candidate.status === 'deleted').length,
-          sampleSources: previewCandidates.slice(0, 5).map((candidate) => ({
+          candidateCount: visiblePreviewCandidates.length,
+          skippedByAutoSyncCount: previewCandidates.length - visiblePreviewCandidates.length,
+          readyCount: visiblePreviewCandidates.filter((candidate) => candidate.status === 'ready').length,
+          updateCount: visiblePreviewCandidates.filter((candidate) => candidate.status === 'update').length,
+          invalidCount: visiblePreviewCandidates.filter((candidate) => candidate.status === 'invalid').length,
+          deletedCount: visiblePreviewCandidates.filter((candidate) => candidate.status === 'deleted').length,
+          sampleSources: visiblePreviewCandidates.slice(0, 5).map((candidate) => ({
             date: candidate.date,
             distance: candidate.distance,
             sourceLabel: candidate.sourceLabel,
@@ -1363,11 +1642,12 @@ export default function App() {
           })),
         });
 
-        setPendingImportWorkouts(previewCandidates);
-        setSelectedImportIds(previewCandidates.filter((candidate) => candidate.status === 'ready' || candidate.status === 'deleted').map((candidate) => candidate.previewId));
+        setImportPreviewMode(isAutoSync ? 'auto' : 'manual');
+        setPendingImportWorkouts(visiblePreviewCandidates);
+        setSelectedImportIds(visiblePreviewCandidates.filter((candidate) => candidate.status === 'ready' || candidate.status === 'deleted').map((candidate) => candidate.previewId));
         setPreviewAssignedShoes(
           Object.fromEntries(
-            previewCandidates.map((candidate) => [candidate.previewId, candidate.existingAssignedShoeId || ''])
+            visiblePreviewCandidates.map((candidate) => [candidate.previewId, candidate.existingAssignedShoeId || ''])
           )
         );
         setCurrentPage('syncPreview');
@@ -1377,12 +1657,14 @@ export default function App() {
         }
         console.error('Sync processing error:', innerError);
         const message = innerError?.message || 'Failed while loading workouts.';
-        Alert.alert(
-          'Apple Health sync failed',
-          message === 'Apple Health request timed out'
-            ? 'Apple Health did not finish the workout query in time. Try again, narrow the timeframe, or re-open the app and retry.'
-            : message
-        );
+        if (!isAutoSync) {
+          Alert.alert(
+            'Apple Health sync failed',
+            message === 'Apple Health request timed out'
+              ? 'Apple Health did not finish the workout query in time. Try again, narrow the timeframe, or re-open the app and retry.'
+              : message
+          );
+        }
       } finally {
         if (isActiveSyncRequest(requestId)) {
           setBusyMessage('');
@@ -1393,7 +1675,9 @@ export default function App() {
         return;
       }
       console.error('Sync error:', error);
-      Alert.alert('Error', error?.message || String(error));
+      if (!isAutoSync) {
+        Alert.alert('Error', error?.message || String(error));
+      }
     } finally {
       if (isActiveSyncRequest(requestId)) {
         setIsSyncingWorkouts(false);
@@ -1427,22 +1711,30 @@ export default function App() {
     }
 
     try {
-      const persistedPhotoUrl = await uploadShoePhotoIfNeeded(newShoe.photoUrl || '');
+      setBusyMessage('Saving shoe...');
+      const shoeRef = doc(collection(db, 'users', user.uid, 'shoes'));
+      const photoResult = await prepareShoePhotoForSave({
+        uri: newShoe.photoUrl || '',
+        shoeId: shoeRef.id,
+      });
       const normalizedPurchaseDate = formatPurchaseDateDisplay(newShoe.purchaseDate);
-      const docRef = await addDoc(collection(db, 'users', user.uid, 'shoes'), {
+      const shoePayload = {
         name: newShoe.name,
         brand: newShoe.brand,
         purchaseDate: normalizedPurchaseDate,
         targetMileage: parseFloat(newShoe.targetMileage),
-        photoUrl: persistedPhotoUrl,
+        photoUrl: photoResult.photoUrl,
+        photoStoragePath: photoResult.photoStoragePath,
+        photoUpdatedAt: photoResult.photoUpdatedAt,
         createdAt: new Date().toISOString(),
-      });
+      };
 
-      const updatedShoes = [...shoes, { ...newShoe, id: docRef.id, purchaseDate: normalizedPurchaseDate, targetMileage: parseFloat(newShoe.targetMileage), photoUrl: persistedPhotoUrl }];
+      await setDoc(shoeRef, shoePayload);
+
+      const updatedShoes = [...shoes, { ...shoePayload, id: shoeRef.id }];
       setShoes(updatedShoes);
-      if (updatedShoes.length === 3) {
-        awardAchievement('collector');
-      }
+      await writeCachedUserData(user.uid, { shoes: updatedShoes });
+      await awardLogBasedAchievements(logs, updatedShoes);
       setNewShoe({ name: '', brand: '', purchaseDate: '', targetMileage: '300', photoUrl: '' });
       closePurchaseDatePicker();
       setShowAddShoe(false);
@@ -1451,6 +1743,8 @@ export default function App() {
       await loadShoes(user.uid);
     } catch (error) {
       Alert.alert('Error', error?.message || String(error));
+    } finally {
+      setBusyMessage('');
     }
   };
 
@@ -1462,20 +1756,28 @@ export default function App() {
 
     try {
       setBusyMessage('Saving shoe...');
-      setShowEditShoe(false);
-      const persistedPhotoUrl = await uploadShoePhotoIfNeeded(editingShoe.photoUrl || '');
+      const photoResult = await prepareShoePhotoForSave({
+        uri: editingShoe.photoUrl || '',
+        shoeId: editingShoe.id,
+        existingStoragePath: editingShoe.photoStoragePath || '',
+        clearMissingLocalPhoto: true,
+      });
       const normalizedPurchaseDate = formatPurchaseDateDisplay(editingShoe.purchaseDate || '');
       const payload = {
         name: editingShoe.name,
         brand: editingShoe.brand,
         purchaseDate: normalizedPurchaseDate,
         targetMileage: parseFloat(editingShoe.targetMileage || '300'),
-        photoUrl: persistedPhotoUrl,
+        photoUrl: photoResult.photoUrl,
+        photoStoragePath: photoResult.photoStoragePath,
+        photoUpdatedAt: photoResult.photoUpdatedAt || editingShoe.photoUpdatedAt || null,
         retired: Boolean(editingShoe.retired),
       };
 
       await setDoc(doc(db, 'users', user.uid, 'shoes', editingShoe.id), payload, { merge: true });
-      setShoes((prev) => prev.map((shoe) => (shoe.id === editingShoe.id ? { ...shoe, ...payload } : shoe)));
+      const updatedShoes = shoes.map((shoe) => (shoe.id === editingShoe.id ? { ...shoe, ...payload } : shoe));
+      setShoes(updatedShoes);
+      await writeCachedUserData(user.uid, { shoes: updatedShoes });
       setShowEditShoe(false);
       setEditingShoe(null);
       Keyboard.dismiss();
@@ -1492,7 +1794,9 @@ export default function App() {
     try {
       const retired = !editingShoe.retired;
       await setDoc(doc(db, 'users', user.uid, 'shoes', editingShoe.id), { retired }, { merge: true });
-      setShoes((prev) => prev.map((shoe) => (shoe.id === editingShoe.id ? { ...shoe, retired } : shoe)));
+      const updatedShoes = shoes.map((shoe) => (shoe.id === editingShoe.id ? { ...shoe, retired } : shoe));
+      setShoes(updatedShoes);
+      await writeCachedUserData(user.uid, { shoes: updatedShoes });
       setEditingShoe((prev) => (prev ? { ...prev, retired } : prev));
       Alert.alert('Success', retired ? 'Shoe moved to retired.' : 'Shoe moved back to active.');
     } catch (error) {
@@ -1518,17 +1822,18 @@ export default function App() {
 
       const updatedLogs = [...logs, { id: docRef.id, shoeId: newLog.shoeId, mileage: mileageValue, date: newLog.date, notes: newLog.notes }];
       setLogs(updatedLogs);
+      await writeCachedUserData(user.uid, { logs: updatedLogs });
 
       const baseCoins = 10 + Math.floor(mileageValue);
-      const newCoins = (gameStats.coins || 0) + baseCoins;
-      const newStats = { ...gameStats, coins: newCoins };
+      const currentStats = gameStatsRef.current;
+      const newCoins = (currentStats.coins || 0) + baseCoins;
+      const newStats = { ...currentStats, coins: newCoins };
       setGameStats(newStats);
+      gameStatsRef.current = newStats;
+      await writeCachedUserData(user.uid, { gameStats: newStats });
       await setDoc(doc(db, 'users', user.uid, 'gameStats', 'data'), newStats, { merge: true });
 
-      await ensureFirstStepAchievement(updatedLogs.length);
-      const totalMiles = updatedLogs.reduce((sum, log) => sum + log.mileage, 0);
-      if (totalMiles >= 13.1) await awardAchievement('halfMiler');
-      if (shoes.length >= 3) await awardAchievement('collector');
+      await awardLogBasedAchievements(updatedLogs);
 
       setNewLog({ shoeId: '', mileage: '', date: new Date().toISOString().split('T')[0], notes: '' });
       setShowAddLog(false);
@@ -1562,6 +1867,9 @@ export default function App() {
       };
 
       await setDoc(doc(db, 'users', user.uid, 'logs', editingLog.id), logPayload, { merge: true });
+      const updatedLogs = logs.map((log) => (log.id === editingLog.id ? { ...log, ...logPayload } : log));
+      setLogs(updatedLogs);
+      await writeCachedUserData(user.uid, { logs: updatedLogs });
 
       if (editingLog.sourceCollection === 'health-workouts' && editingLog.sourceRecordId) {
         await setDoc(
@@ -1581,6 +1889,7 @@ export default function App() {
 
       await loadLogs(user.uid);
       await loadHealthWorkouts(user.uid);
+      await awardLogBasedAchievements(updatedLogs);
       setEditingLog(null);
       Alert.alert('Success', 'Workout updated.');
     } catch (error) {
@@ -1607,6 +1916,9 @@ export default function App() {
               await deleteDoc(doc(db, 'users', user.uid, 'logs', editingLog.id));
             }
 
+            const updatedLogs = logs.filter((log) => log.id !== editingLog.id);
+            setLogs(updatedLogs);
+            await writeCachedUserData(user.uid, { logs: updatedLogs });
             await loadLogs(user.uid);
             setShowEditLog(false);
             setEditingLog(null);
@@ -1704,16 +2016,27 @@ export default function App() {
 
       if (createdLogCount > 0) {
         const bonusCoins = createdLogCount * 10 + Math.floor(importedMiles);
-        const newStats = { ...gameStats, coins: (gameStats.coins || 0) + bonusCoins };
+        const currentStats = gameStatsRef.current;
+        const newStats = { ...currentStats, coins: (currentStats.coins || 0) + bonusCoins };
         setGameStats(newStats);
+        gameStatsRef.current = newStats;
+        await writeCachedUserData(user.uid, { gameStats: newStats });
         await setDoc(doc(db, 'users', user.uid, 'gameStats', 'data'), newStats, { merge: true });
-        await ensureFirstStepAchievement(logs.length + createdLogCount);
       }
 
       await loadLogs(user.uid);
       await loadHealthWorkouts(user.uid);
       await loadGameStats(user.uid);
-      clearImportPreview();
+      const importedPreviewIds = candidatesToImport.map((candidate) => candidate.previewId);
+      await markAutoSyncWorkoutsReviewed(pendingImportWorkouts, importedPreviewIds);
+      const importedLogEntries = candidatesToImport.map((workout) => ({
+        id: `pending-${workout.previewId}`,
+        shoeId: previewAssignedShoes[workout.previewId],
+        mileage: Number(workout.distance) || 0,
+        date: workout.date,
+      }));
+      await awardLogBasedAchievements([...logs, ...importedLogEntries]);
+      await clearImportPreview({ skipReviewMark: true });
       Alert.alert('Success', `Imported ${candidatesToImport.length} workout(s).`);
     } catch (error) {
       Alert.alert('Error', error?.message || String(error));
@@ -1756,13 +2079,14 @@ export default function App() {
     }
   };
 
-  const deleteStoragePhotoByUrl = async (photoUrl) => {
-    if (!photoUrl || String(photoUrl).startsWith('file://')) {
+  const deleteStoragePhoto = async ({ photoUrl = '', photoStoragePath = '' } = {}) => {
+    const storageReference = photoStoragePath || photoUrl;
+    if (!storageReference || String(storageReference).startsWith('file://') || String(storageReference).startsWith('ph://')) {
       return;
     }
 
     try {
-      await deleteObject(ref(storage, photoUrl));
+      await deleteObject(ref(storage, storageReference));
     } catch (error) {
       console.warn('Account deletion photo cleanup skipped:', error);
     }
@@ -1786,7 +2110,8 @@ export default function App() {
     await deleteUserCollectionDocs(userId, 'health-workouts');
     await deleteUserCollectionDocs(userId, 'gameStats');
     for (const docSnapshot of shoeSnapshot.docs) {
-      await deleteStoragePhotoByUrl(docSnapshot.data()?.photoUrl);
+      const shoeData = docSnapshot.data() || {};
+      await deleteStoragePhoto({ photoUrl: shoeData.photoUrl, photoStoragePath: shoeData.photoStoragePath });
       await deleteDoc(docSnapshot.ref);
     }
     await deleteDoc(doc(db, 'users', userId));
@@ -1840,17 +2165,74 @@ export default function App() {
     );
   };
 
+  const getMaxLogsInSevenDayWindow = (items) => {
+    const timestamps = items
+      .map((log) => {
+        const parsed = new Date(log?.date || log?.createdAt || '');
+        if (Number.isNaN(parsed.getTime())) {
+          return null;
+        }
+        parsed.setHours(0, 0, 0, 0);
+        return parsed.getTime();
+      })
+      .filter((value) => value !== null)
+      .sort((a, b) => a - b);
+
+    let maxCount = 0;
+    timestamps.forEach((start) => {
+      const end = start + 6 * 24 * 60 * 60 * 1000;
+      const count = timestamps.filter((value) => value >= start && value <= end).length;
+      maxCount = Math.max(maxCount, count);
+    });
+
+    return maxCount;
+  };
+
+  const awardLogBasedAchievements = async (updatedLogs, updatedShoes = shoes) => {
+    const safeLogs = Array.isArray(updatedLogs) ? updatedLogs : [];
+    const totalMiles = safeLogs.reduce((sum, log) => sum + Number(log.mileage || 0), 0);
+    const maxWeekRuns = getMaxLogsInSevenDayWindow(safeLogs);
+
+    if (safeLogs.length >= 1) await awardAchievement('firstStep');
+    if (totalMiles >= 13.1) await awardAchievement('halfMiler');
+    if (totalMiles >= 26.2) await awardAchievement('fullMarathon');
+    if (totalMiles >= 100) await awardAchievement('miles100');
+    if (totalMiles >= 500) await awardAchievement('miles500');
+    if (totalMiles >= 1000) await awardAchievement('miles1000');
+    if (maxWeekRuns >= 3) await awardAchievement('weekWarrior');
+    if (maxWeekRuns >= 5) await awardAchievement('weekWarrior5');
+    if (maxWeekRuns >= 7) await awardAchievement('weekWarrior7');
+    if ((updatedShoes || []).length >= 3) await awardAchievement('collector');
+  };
+
   const awardAchievement = async (achievementId) => {
-    if (!gameStats.achievements || !gameStats.achievements.includes(achievementId)) {
+    const currentStats = {
+      coins: 0,
+      achievements: [],
+      healthLinked: false,
+      autoSyncHealthOnOpen: false,
+      autoSyncSkippedWorkoutIds: [],
+      ...gameStatsRef.current,
+    };
+    if (!currentStats.achievements || !currentStats.achievements.includes(achievementId)) {
       const achievement = ACHIEVEMENTS[achievementId];
+      if (!achievement) return;
       setUnlockedAchievement(achievement);
-      const newCoins = (gameStats.coins || 0) + achievement.coins;
-      const newAchievements = [...(gameStats.achievements || []), achievementId];
-      const newStats = { coins: newCoins, achievements: newAchievements };
-      const previousLevel = getRunnerLevelDetails(gameStats.coins || 0);
+      const newCoins = (currentStats.coins || 0) + achievement.coins;
+      const newAchievements = [...(currentStats.achievements || []), achievementId];
+      const newStats = { ...currentStats, coins: newCoins, achievements: newAchievements };
+      const previousLevel = getRunnerLevelDetails(currentStats.coins || 0);
       const nextLevel = getRunnerLevelDetails(newCoins);
       setGameStats(newStats);
-      await setDoc(doc(db, 'users', user.uid, 'gameStats', 'data'), newStats, { merge: true });
+      gameStatsRef.current = newStats;
+      if (user?.uid) {
+        await writeCachedUserData(user.uid, { gameStats: newStats });
+        try {
+          await setDoc(doc(db, 'users', user.uid, 'gameStats', 'data'), newStats, { merge: true });
+        } catch (error) {
+          console.warn('Achievement sync failed; saved locally:', error);
+        }
+      }
       queueCelebration({
         id: `achievement-${achievement.id}-${Date.now()}`,
         title: 'ACHIEVEMENT UNLOCKED',
@@ -1870,12 +2252,6 @@ export default function App() {
         });
       }
       setTimeout(() => setUnlockedAchievement(null), 3000);
-    }
-  };
-
-  const ensureFirstStepAchievement = async (logCount) => {
-    if ((Number(logCount) || 0) >= 1 && !(gameStats.achievements || []).includes('firstStep')) {
-      await awardAchievement('firstStep');
     }
   };
 
@@ -1957,7 +2333,7 @@ export default function App() {
         : await requestHealthKitPermissionRef.current?.({ silentSuccess: true, suppressErrorAlert: true });
 
       if (granted) {
-        await syncWorkoutsRef.current?.();
+        await syncWorkoutsRef.current?.({ auto: true });
       }
     })();
   }, [user, loading, gameStats.autoSyncHealthOnOpen, gameStats.healthLinked, healthAuthorized]);
@@ -2183,7 +2559,7 @@ export default function App() {
                       <Text style={styles.shoeBannerText}>{shoe.name} / {shoe.brand}</Text>
                       <View style={styles.shoeCardTopRow}>
                         <View style={styles.shoePhotoWrap}>
-                          {shoe.photoUrl ? <ExpoImage source={{ uri: shoe.photoUrl }} style={styles.shoeHeroImage} contentFit="cover" /> : <View style={styles.shoeHeroPlaceholder}><Text style={styles.shoeHeroPlaceholderText}>NO PHOTO</Text></View>}
+                          {renderShoePhoto(shoe.photoUrl, styles.shoeHeroImage, `card-${shoe.id}`)}
                         </View>
                         <View style={styles.shoeCardMeta}>
                           <View style={styles.shoeMileageSummary}>
@@ -2328,7 +2704,12 @@ export default function App() {
               <TextInput style={styles.input} placeholder="SHOE LIFETIME (miles)" placeholderTextColor="#666" keyboardType="decimal-pad" value={newShoe.targetMileage} onChangeText={(text) => setNewShoe({ ...newShoe, targetMileage: text })} />
               <Text style={styles.inputHint}>Distance should be entered in miles. Tip: most running shoes last about 250 to 450 miles depending on the type of shoe.</Text>
               <TextInput style={styles.input} placeholder="PHOTO URL (optional)" placeholderTextColor="#666" value={newShoe.photoUrl} onChangeText={(text) => setNewShoe({ ...newShoe, photoUrl: text })} />
-              {newShoe.photoUrl ? <ExpoImage source={{ uri: newShoe.photoUrl }} style={styles.newShoePreview} contentFit="cover" /> : null}
+              {newShoe.photoUrl ? renderShoePhoto(newShoe.photoUrl, styles.newShoePreview, 'new-shoe-photo') : null}
+              {newShoe.photoUrl ? (
+                <TouchableOpacity style={styles.btnDanger} onPress={() => setNewShoe((prev) => ({ ...prev, photoUrl: '' }))}>
+                  <Text style={styles.btnDangerText}>REMOVE CURRENT PHOTO</Text>
+                </TouchableOpacity>
+              ) : null}
               <View style={styles.photoBtnRow}>
                 <TouchableOpacity style={styles.photoBtn} onPress={pickShoePhotoFromLibrary}><Text style={styles.photoBtnText}>PHOTO LIBRARY</Text></TouchableOpacity>
                 <TouchableOpacity style={styles.photoBtn} onPress={takeShoePhotoWithCamera}><Text style={styles.photoBtnText}>CAMERA</Text></TouchableOpacity>
@@ -2372,7 +2753,7 @@ export default function App() {
                 />
                 <Text style={styles.inputHint}>PURCHASE DATE FORMAT: MM/DD/YYYY</Text>
                 <Text style={styles.fieldLabel}>PHOTO</Text>
-                {editingShoe?.photoUrl ? <ExpoImage source={{ uri: editingShoe.photoUrl }} style={styles.newShoePreview} contentFit="cover" /> : <Text style={styles.emptyText}>NO PHOTO SAVED</Text>}
+                {editingShoe?.photoUrl ? renderShoePhoto(editingShoe.photoUrl, styles.newShoePreview, `edit-${editingShoe.id || 'shoe'}`) : <Text style={styles.emptyText}>NO PHOTO SAVED</Text>}
                 <TextInput style={styles.input} placeholder="PHOTO URL (optional)" placeholderTextColor="#666" value={editingShoe?.photoUrl || ''} onChangeText={(text) => setEditingShoe((prev) => ({ ...(prev || {}), photoUrl: text }))} />
                 <View style={styles.photoBtnRow}>
                   <TouchableOpacity style={styles.photoBtn} onPress={pickEditShoePhotoFromLibrary}><Text style={styles.photoBtnText}>{editingShoe?.photoUrl ? 'REPLACE FROM LIBRARY' : 'PHOTO LIBRARY'}</Text></TouchableOpacity>
@@ -2753,7 +3134,7 @@ export default function App() {
         </View>
 
         <ScrollView style={styles.content}>
-          {shoe.photoUrl ? <ExpoImage source={{ uri: shoe.photoUrl }} style={styles.detailShoeImage} contentFit="cover" /> : null}
+          {shoe.photoUrl ? renderShoePhoto(shoe.photoUrl, styles.detailShoeImage, `detail-${shoe.id}`) : null}
           <Text style={styles.detailTitle}>{shoe.name}</Text>
           <Text style={styles.detailBrand}>{shoe.brand}</Text>
 
@@ -2880,7 +3261,7 @@ export default function App() {
                 />
                 <Text style={styles.inputHint}>PURCHASE DATE FORMAT: MM/DD/YYYY</Text>
                 <Text style={styles.fieldLabel}>PHOTO</Text>
-                {editingShoe?.photoUrl ? <ExpoImage source={{ uri: editingShoe.photoUrl }} style={styles.newShoePreview} contentFit="cover" /> : <Text style={styles.emptyText}>NO PHOTO SAVED</Text>}
+                {editingShoe?.photoUrl ? renderShoePhoto(editingShoe.photoUrl, styles.newShoePreview, `detail-edit-${editingShoe.id || 'shoe'}`) : <Text style={styles.emptyText}>NO PHOTO SAVED</Text>}
                 {editingShoe?.photoUrl ? (
                   <TouchableOpacity style={styles.btnDanger} onPress={() => setEditingShoe((prev) => ({ ...(prev || {}), photoUrl: '' }))}>
                     <Text style={styles.btnDangerText}>REMOVE CURRENT PHOTO</Text>
