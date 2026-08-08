@@ -288,6 +288,7 @@ export default function App() {
   const [pendingImportWorkouts, setPendingImportWorkouts] = useState([]);
   const [selectedImportIds, setSelectedImportIds] = useState([]);
   const [previewAssignedShoes, setPreviewAssignedShoes] = useState({});
+  const [pendingNewShoeAssignmentPreviewId, setPendingNewShoeAssignmentPreviewId] = useState(null);
   const [importPreviewMode, setImportPreviewMode] = useState('manual');
   const [photoLoadFailures, setPhotoLoadFailures] = useState({});
   const [syncDays, setSyncDays] = useState(30);
@@ -1891,6 +1892,8 @@ export default function App() {
       return;
     }
 
+    const assignmentPreviewId = pendingNewShoeAssignmentPreviewId;
+
     try {
       setBusyMessage('Saving shoe...');
       const shoeRef = doc(collection(db, 'users', user.uid, 'shoes'));
@@ -1917,10 +1920,17 @@ export default function App() {
       setShoes(updatedShoes);
       await writeCachedUserData(user.uid, { shoes: updatedShoes });
       await awardLogBasedAchievements(logs, updatedShoes);
+      if (assignmentPreviewId) {
+        setPreviewAssignedShoes((prev) => ({ ...prev, [assignmentPreviewId]: shoeRef.id }));
+        setSelectedImportIds((prev) => (prev.includes(assignmentPreviewId) ? prev : [...prev, assignmentPreviewId]));
+      }
       setNewShoe({ name: '', brand: '', purchaseDate: '', targetMileage: '300', photoUrl: '' });
       closePurchaseDatePicker();
+      setPendingNewShoeAssignmentPreviewId(null);
       setShowAddShoe(false);
-      setCurrentPage('dashboard');
+      if (!assignmentPreviewId) {
+        setCurrentPage('dashboard');
+      }
       Keyboard.dismiss();
       await loadShoes(user.uid);
     } catch (error) {
@@ -1929,6 +1939,67 @@ export default function App() {
       setBusyMessage('');
     }
   };
+
+  const closeAddShoeModal = () => {
+    setShowAddShoe(false);
+    setPendingNewShoeAssignmentPreviewId(null);
+    closePurchaseDatePicker();
+  };
+
+  const openAddShoeFromImportPreview = (previewId) => {
+    setPendingNewShoeAssignmentPreviewId(previewId);
+    setNewShoe({ name: '', brand: '', purchaseDate: '', targetMileage: '300', photoUrl: '' });
+    setShowAddShoe(true);
+  };
+
+  const renderAddShoeModal = () => (
+    <Modal visible={showAddShoe} transparent animationType="slide">
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={topModalStyle}>
+        <ScrollView contentContainerStyle={styles.modalScrollContent} keyboardShouldPersistTaps="handled">
+        <View style={[styles.modalContent, styles.modalTopContent]}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>ADD SHOE</Text>
+            <TouchableOpacity onPress={closeAddShoeModal}>
+              <Text style={styles.closeBtn}>X</Text>
+            </TouchableOpacity>
+          </View>
+          <TextInput style={styles.input} placeholder="SHOE NAME" placeholderTextColor="#666" value={newShoe.name} onChangeText={(text) => setNewShoe({ ...newShoe, name: text })} />
+          <TextInput style={styles.input} placeholder="BRAND" placeholderTextColor="#666" value={newShoe.brand} onChangeText={(text) => setNewShoe({ ...newShoe, brand: text })} />
+          <Text style={styles.fieldLabel}>PURCHASE DATE</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="MM/DD/YYYY"
+            placeholderTextColor="#666"
+            value={newShoe.purchaseDate}
+            keyboardType="number-pad"
+            onChangeText={(text) => setNewShoe({ ...newShoe, purchaseDate: formatPurchaseDateInput(text) })}
+          />
+          <Text style={styles.inputHint}>PURCHASE DATE FORMAT: MM/DD/YYYY</Text>
+          <Text style={styles.fieldLabel}>SHOE LIFETIME</Text>
+          <TextInput style={styles.input} placeholder="SHOE LIFETIME (miles)" placeholderTextColor="#666" keyboardType="decimal-pad" value={newShoe.targetMileage} onChangeText={(text) => setNewShoe({ ...newShoe, targetMileage: text })} />
+          <Text style={styles.inputHint}>Distance should be entered in miles. Tip: most running shoes last about 250 to 450 miles depending on the type of shoe.</Text>
+          <TextInput style={styles.input} placeholder="PHOTO URL (optional)" placeholderTextColor="#666" value={newShoe.photoUrl} onChangeText={(text) => setNewShoe({ ...newShoe, photoUrl: text })} />
+          {newShoe.photoUrl ? renderShoePhoto(newShoe.photoUrl, styles.newShoePreview, 'new-shoe-photo') : null}
+          {newShoe.photoUrl ? (
+            <TouchableOpacity style={styles.btnDanger} onPress={() => setNewShoe((prev) => ({ ...prev, photoUrl: '' }))}>
+              <Text style={styles.btnDangerText}>REMOVE CURRENT PHOTO</Text>
+            </TouchableOpacity>
+          ) : null}
+          <View style={styles.photoBtnRow}>
+            <TouchableOpacity style={styles.photoBtn} onPress={pickShoePhotoFromLibrary}><Text style={styles.photoBtnText}>PHOTO LIBRARY</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.photoBtn} onPress={takeShoePhotoWithCamera}><Text style={styles.photoBtnText}>CAMERA</Text></TouchableOpacity>
+          </View>
+          <TouchableOpacity style={styles.doneBtn} onPress={() => Keyboard.dismiss()}>
+            <Text style={styles.doneBtnText}>DONE</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.submitBtn} onPress={handleAddShoe}>
+            <Text style={styles.submitBtnText}>ADD SHOE</Text>
+          </TouchableOpacity>
+        </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
 
   const handleSaveShoeEdits = async () => {
     if (!editingShoe?.id || !editingShoe?.name || !editingShoe?.brand) {
@@ -2898,52 +2969,7 @@ export default function App() {
           ) : null}
         </ScrollView>
 
-        <Modal visible={showAddShoe} transparent animationType="slide">
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={topModalStyle}>
-            <ScrollView contentContainerStyle={styles.modalScrollContent} keyboardShouldPersistTaps="handled">
-            <View style={[styles.modalContent, styles.modalTopContent]}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>ADD SHOE</Text>
-                <TouchableOpacity onPress={() => setShowAddShoe(false)}>
-                  <Text style={styles.closeBtn}>X</Text>
-                </TouchableOpacity>
-              </View>
-              <TextInput style={styles.input} placeholder="SHOE NAME" placeholderTextColor="#666" value={newShoe.name} onChangeText={(text) => setNewShoe({ ...newShoe, name: text })} />
-              <TextInput style={styles.input} placeholder="BRAND" placeholderTextColor="#666" value={newShoe.brand} onChangeText={(text) => setNewShoe({ ...newShoe, brand: text })} />
-              <Text style={styles.fieldLabel}>PURCHASE DATE</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="MM/DD/YYYY"
-                placeholderTextColor="#666"
-                value={newShoe.purchaseDate}
-                keyboardType="number-pad"
-                onChangeText={(text) => setNewShoe({ ...newShoe, purchaseDate: formatPurchaseDateInput(text) })}
-              />
-              <Text style={styles.inputHint}>PURCHASE DATE FORMAT: MM/DD/YYYY</Text>
-              <Text style={styles.fieldLabel}>SHOE LIFETIME</Text>
-              <TextInput style={styles.input} placeholder="SHOE LIFETIME (miles)" placeholderTextColor="#666" keyboardType="decimal-pad" value={newShoe.targetMileage} onChangeText={(text) => setNewShoe({ ...newShoe, targetMileage: text })} />
-              <Text style={styles.inputHint}>Distance should be entered in miles. Tip: most running shoes last about 250 to 450 miles depending on the type of shoe.</Text>
-              <TextInput style={styles.input} placeholder="PHOTO URL (optional)" placeholderTextColor="#666" value={newShoe.photoUrl} onChangeText={(text) => setNewShoe({ ...newShoe, photoUrl: text })} />
-              {newShoe.photoUrl ? renderShoePhoto(newShoe.photoUrl, styles.newShoePreview, 'new-shoe-photo') : null}
-              {newShoe.photoUrl ? (
-                <TouchableOpacity style={styles.btnDanger} onPress={() => setNewShoe((prev) => ({ ...prev, photoUrl: '' }))}>
-                  <Text style={styles.btnDangerText}>REMOVE CURRENT PHOTO</Text>
-                </TouchableOpacity>
-              ) : null}
-              <View style={styles.photoBtnRow}>
-                <TouchableOpacity style={styles.photoBtn} onPress={pickShoePhotoFromLibrary}><Text style={styles.photoBtnText}>PHOTO LIBRARY</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.photoBtn} onPress={takeShoePhotoWithCamera}><Text style={styles.photoBtnText}>CAMERA</Text></TouchableOpacity>
-              </View>
-              <TouchableOpacity style={styles.doneBtn} onPress={() => Keyboard.dismiss()}>
-                <Text style={styles.doneBtnText}>DONE</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.submitBtn} onPress={handleAddShoe}>
-                <Text style={styles.submitBtnText}>ADD SHOE</Text>
-              </TouchableOpacity>
-            </View>
-            </ScrollView>
-          </KeyboardAvoidingView>
-        </Modal>
+        {renderAddShoeModal()}
 
         <Modal visible={showEditShoe} transparent animationType="slide">
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={topModalStyle}>
@@ -3305,6 +3331,13 @@ export default function App() {
                           </TouchableOpacity>
                         );
                       })}
+                      <TouchableOpacity
+                        key={`${candidate.previewId}-add-new-shoe`}
+                        style={[styles.previewShoeChip, styles.previewShoeChipAdd]}
+                        onPress={() => openAddShoeFromImportPreview(candidate.previewId)}
+                      >
+                        <Text style={styles.previewShoeChipAddText}>+ ADD NEW SHOE</Text>
+                      </TouchableOpacity>
                     </ScrollView>
                     <TouchableOpacity
                       style={[styles.importPreviewSelectBtn, isSelected && styles.importPreviewSelectBtnActive]}
@@ -3324,6 +3357,7 @@ export default function App() {
             </TouchableOpacity>
           </View>
         </ScrollView>
+        {renderAddShoeModal()}
         {renderBusyOverlay()}
       </View>
     );
@@ -3796,6 +3830,8 @@ const styles = StyleSheet.create({
   previewShoeChipInactive: { opacity: 0.7 },
   previewShoeChipActive: { borderColor: '#ffff00', backgroundColor: '#2a2a00', borderWidth: 5, shadowColor: '#ffff00', shadowOpacity: 1, shadowRadius: 14, shadowOffset: { width: 0, height: 0 }, elevation: 12 },
   previewShoeChipText: { color: '#0ff', fontSize: 10, fontFamily: ARCADE_FONT_FAMILY, textAlign: 'center' },
+  previewShoeChipAdd: { backgroundColor: '#050516', borderColor: '#0ff', borderStyle: 'dashed' },
+  previewShoeChipAddText: { color: '#0ff', fontSize: 10, fontFamily: ARCADE_FONT_FAMILY, textAlign: 'center', lineHeight: 16 },
   selectedShoeSummary: { color: '#00ff00', fontSize: 10, fontFamily: ARCADE_FONT_FAMILY, lineHeight: 16, marginBottom: 8 },
   selectedShoeSummaryMuted: { color: '#ff9f43', fontSize: 10, fontFamily: ARCADE_FONT_FAMILY, lineHeight: 16, marginBottom: 8 },
   loadingCancelBtn: { position: 'absolute', bottom: 44, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.68)', borderWidth: 2, borderColor: '#ffff00', paddingHorizontal: 24, paddingVertical: 12 },
